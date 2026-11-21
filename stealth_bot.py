@@ -542,10 +542,14 @@ class Bot:
                 nt = min(threats, key=lambda t: t["dist"])
                 aim[0] = math.atan2(nt["pos"][1] - y, nt["pos"][0] - x)
                 aim[1] = 0.0
-                if nt["dist"] < 40 and not nt.get("sound"):
+                if nt["dist"] < 70 and not nt.get("sound"):
                     gun = me["weapons"][0]
                     if gun is not None and gun.get("cooldown", 0) <= 0.05:
                         fire[0] = True
+                    w1 = me["weapons"][1]
+                    if w1 is not None and w1["kind"] == "lightning" and nt["dist"] < 45 and me["energy"] > 6:
+                        if w1.get("cooldown", 0) <= 0.05:
+                            fire[1] = True
             self.mode = "flee"
         elif self.stuck_remaining > 0 and not flee and combat_target is None:
             move = [math.cos(self.stuck_dir), math.sin(self.stuck_dir)]
@@ -676,8 +680,19 @@ class Bot:
                 move = [0.0, 0.0]
             boost = False
             self.mode = "roof"
-            aim[0] = math.atan2(dy, dx) if dn > 0 else aim[0]
-            aim[1] = -0.1
+            # defensive fire if threatened
+            real_threats = [th for th in threats if th.get("id", 0) >= 0]
+            if real_threats:
+                nt = min(real_threats, key=lambda t: t["dist"])
+                if nt["dist"] < 120:
+                    aim[0] = math.atan2(nt["pos"][1] - y, nt["pos"][0] - x)
+                    aim[1] = math.atan2(nt["pos"][2] + 4.5 - (z + 7.0), math.hypot(nt["pos"][0]-x, nt["pos"][1]-y))
+                    gun = me["weapons"][0]
+                    if gun is not None and gun.get("cooldown", 0) <= 0.05:
+                        fire[0] = True
+            else:
+                aim[0] = math.atan2(dy, dx) if dn > 0 else aim[0]
+                aim[1] = -0.1
         elif force_zone:
             dx = nzc[0] - x
             dy = nzc[1] - y
