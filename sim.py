@@ -714,6 +714,8 @@ class Match:
                 self.bullets.append({"owner": 0, "pos": list(muzzle), "vel": [vx, vy, vz],
                                      "life": 1.2, "aimed": best.id if best else None})
                 self.player.ammo -= 1
+                if self.player.ammo <= 0:
+                    self.player.reload = CFG["weapons"]["gun"]["reload"]
                 self.player.gun_cd = CFG["weapons"]["gun"]["cooldown"]
                 self.sounds.append((0, "gun", self.player.pos))
             if "take" in act and self.player.weapons[1] is None:

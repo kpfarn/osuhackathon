@@ -150,13 +150,17 @@ class Bot:
         self.loot_step = None
         self.loot_step_t = -99.0
         self.mortar_danger = False
+        self.exp_here = 0.0
         self.crate_aim = None
+        self.farm_aim = False
         self.res_mem = {}
 
         # execution
         self.mode = "init"
         self.turn_bias = 0.0
         self.want_jump = False
+        self._last_move = (0.0, 0.0)
+        self._last_aim = (0.0, -0.05)
         self.stuck = 0
         self.stuck_t = -99.0
         self.prev_pos = None
@@ -829,6 +833,10 @@ class Bot:
                     continue
                 ca = (x, y, zc + 1.5)
                 break
+        safe_shot = (not threats) or nd > 110.0
+        self.farm_aim = (ca is not None and safe_shot
+                         and self.hp > 0.60 * self.max_hp
+                         and not self.charge_threat)
         self.crate_aim = ca
 
         # a supply drop is the jackpot: three cubes plus a full heal.
@@ -1126,6 +1134,30 @@ class Bot:
 
     # ----------------------------------------------------------------- act
     def act(self, obs):
+        try:
+            return self._act(obs)
+        except Exception:
+            # never let one odd observation end the match: return a legal action
+            tick = obs.get("tick", 0)
+            move = self._last_move
+            if abs(move[0]) + abs(move[1]) < 0.05:
+                try:
+                    z = obs.get("zone") or {}
+                    c = z.get("center", [0.0, 0.0])
+                    pp = (obs.get("self") or {}).get("pos", [0.0, 0.0, 0.0])
+                    dx, dy = c[0] - pp[0], c[1] - pp[1]
+                    d = math.hypot(dx, dy)
+                    if d > 1e-6:
+                        move = (dx / d, dy / d)
+                except Exception:
+                    pass
+            aim = self._last_aim
+            return {"tick": tick, "move": [float(move[0]), float(move[1])],
+                    "boost": False, "jump": False,
+                    "aim": [float(aim[0]), float(aim[1])],
+                    "fire": [False, False]}
+
+    def _act(self, obs):
         self._t0 = time.perf_counter()
         self._exp_cache = {}
         t = obs["t"]
@@ -1184,6 +1216,7 @@ class Bot:
         elif margin > 28.0:
             self.zone_forced = False
         exp_here = self._exposure(x, y, threats, z)
+        self.exp_here = exp_here
         urgent = self.charge_threat and exp_here > 0.0 and nd < 320.0
         # a blind dash is only worth it when staying out is certain death
         zone_dash = (margin < -6.0
@@ -1197,6 +1230,19 @@ class Bot:
         goal = None
 
         # ---- pick a goal ------------------------------------------------
+        real_close = [e for e in threats
+                      if e.get("real") and e.get("id", -1) >= 0
+                      and math.hypot(e["pos"][0] - x, e["pos"][1] - y) < 130.0]
+        engage = None
+        if not zone_dash and not urgent and self.hp > 0.70 * self.max_hp:
+            wounded = [e for e in real_close
+                       if (e.get("hp") or 1400.0) < 0.42 * 1400.0]
+            if wounded and math.hypot(wounded[0]["pos"][0] - x,
+                                      wounded[0]["pos"][1] - y) < 160.0:
+                engage = wounded[0]
+            elif (len(real_close) == 1
+                  and (self.weapons[1] is not None or nd < 65.0)):
+                engage = real_close[0]
         if zone_dash:
             mode = "zone!"
             if zr <= 1.0:
@@ -1218,7 +1264,19 @@ class Bot:
                 self.esc_t = t
             goal = self.esc_goal
             boost = True
-        elif self.zone_forced:
+        elif engage is not None:
+            mode = "engage"
+            tx, ty = engage["pos"][0], engage["pos"][1]
+            ux, uy = unit(x - tx, y - ty)
+            if ux == 0.0 and uy == 0.0:
+                ux, uy = 1.0, 0.0
+            perp = (-uy, ux)
+            sign = 1.0 if int(t / 4.0) % 2 == 0 else -1.0
+            radial = max(-0.7, min(0.8, (math.hypot(tx - x, ty - y) - 52.0) / 30.0))
+            goal = (x + (ux * radial + perp[0] * sign * 0.9) * 16.0,
+                    y + (uy * radial + perp[1] * sign * 0.9) * 16.0)
+            boost = self.energy > 20.0
+        elif self.zone_forced and nd >= 70.0:
             # get inside, but hug cover on the way when there is time
             mode = "zone"
             if nearest is not None and nd < 320.0:
@@ -1269,7 +1327,7 @@ class Bot:
                     step = self._covered_step(lx, ly, threats, t, 50.0)
                 elif ld < 120.0 and self.loot[2] == "weapon":
                     step = self._covered_step(lx, ly, threats, t, 60.0)
-            if step is not None:
+            if step is not None and nd > 90.0:
                 mode = "loot"
                 goal = step
             else:
@@ -1297,6 +1355,7 @@ class Bot:
         if mode not in ("roam", "loot", "hide"):
             self.loot = None
             self.crate_aim = None
+            self.farm_aim = False
         self.goal = goal
         self.goal_kind = mode
 
@@ -1375,25 +1434,45 @@ class Bot:
                "boost": bool(boost), "jump": bool(jump),
                "aim": [float(aim_yaw), float(aim_pitch)], "fire": fire}
         act.update(extra)
+        self._last_move = (move[0], move[1])
+        self._last_aim = (aim_yaw, aim_pitch)
         return act
 
     # ------------------------------------------------------------ tactics
+    def _best_mech(self, obs, max_range):
+        x, y = self.pos[0], self.pos[1]
+        best = None
+        bs = INF
+        for m in obs.get("mechs", ()):
+            if m.get("kind") != "mech":
+                continue
+            d = math.hypot(m["pos"][0] - x, m["pos"][1] - y)
+            if d > max_range:
+                continue
+            hp = m.get("hp")
+            hp = 1400.0 if hp is None else hp
+            score = d + 0.035 * min(hp, 1400.0)
+            if hp < 0.42 * 1400.0:
+                score -= 45.0  # finish the wounded first
+            if score < bs:
+                bs = score
+                best = m
+        return best, bs
+
     def _aim_target(self, obs, threats, move, muzzle):
         x, y, z = self.pos
-        best = None
-        bd = 1e9
-        for e in threats:
-            if not e.get("real"):
-                continue
-            d = math.hypot(e["pos"][0] - x, e["pos"][1] - y)
-            if d < bd:
-                bd = d
-                best = e
-        if best is not None and bd < 300.0:
-            yaw = math.atan2(best["pos"][1] - y, best["pos"][0] - x)
-            pitch = math.atan2(best["pos"][2] + self.height * 0.5 - (z + muzzle),
-                               max(bd, 1.0))
-            return yaw, pitch
+        if self.farm_aim and self.crate_aim is not None and not self.charge_threat:
+            cx, cy, cz = self.crate_aim
+            d = math.hypot(cx - x, cy - y)
+            return math.atan2(cy - y, cx - x), math.atan2(cz - (z + muzzle), max(d, 1.0))
+        best, _bs = self._best_mech(obs, 300.0)
+        if best is not None:
+            d = math.hypot(best["pos"][0] - x, best["pos"][1] - y)
+            if not (self.exp_here <= 0.0 and d > 130.0):
+                yaw = math.atan2(best["pos"][1] - y, best["pos"][0] - x)
+                pitch = math.atan2(best["pos"][2] + self.height * 0.5 - (z + muzzle),
+                                   max(d, 1.0))
+                return yaw, pitch
         if self.crate_aim is not None:
             cx, cy, cz = self.crate_aim
             d = math.hypot(cx - x, cy - y)
@@ -1417,15 +1496,11 @@ class Bot:
             gs = gun.get("stats", self.gun)
             gspeed = gs.get("speed", self.gun["speed"])
             grange = gs.get("range", self.gun["range"])
-            target = None
-            bd = 1e9
-            for m in obs["mechs"]:
-                if m["kind"] != "mech":
-                    continue
-                d = math.hypot(m["pos"][0] - x, m["pos"][1] - y)
-                if d < bd and d < grange * 0.95:
-                    bd = d
-                    target = m
+            target, _bs = self._best_mech(obs, grange * 0.95)
+            bd = (math.hypot(target["pos"][0] - x, target["pos"][1] - y)
+                  if target is not None else INF)
+            if self.farm_aim and self.crate_aim is not None:
+                target = None
             if target is not None:
                 tt = bd / max(gspeed, 1.0)
                 tp = target["pos"]
@@ -1456,15 +1531,7 @@ class Bot:
                 and w1.get("cooldown", 0) <= 0.02 and self.hp > 0.45 * self.max_hp
                 and not self.charge_threat):
             lr = self.laser["range"] * 0.92 if self.laser else 260.0
-            tgt = None
-            bd = 1e9
-            for m in obs["mechs"]:
-                if m["kind"] != "mech":
-                    continue
-                d = math.hypot(m["pos"][0] - x, m["pos"][1] - y)
-                if d < bd and d < lr:
-                    bd = d
-                    tgt = m
+            tgt, _bs = self._best_mech(obs, lr)
             if tgt is not None:
                 if w1.get("charge", 0.0) > 0.0:
                     # hold until (almost) full, then release for max damage
