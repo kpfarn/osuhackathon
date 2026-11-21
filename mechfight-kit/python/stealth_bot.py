@@ -643,12 +643,25 @@ class Bot:
             dx = gx - x
             dy = gy - y
             dn = math.hypot(dx, dy)
+            rx, ry = 0.0, 0.0
             if dn > 0:
-                move = [dx / dn, dy / dn]
-                jit = math.sin(obs["t"] * 1.3) * 0.4
+                rx += dx / dn
+                ry += dy / dn
+            # repulsion from nearby enemies
+            for th in threats:
+                if th["dist"] < 180:
+                    w = 1.0 / (th["dist"] + 10.0)
+                    rx += (x - th["pos"][0]) * w * 1.5
+                    ry += (y - th["pos"][1]) * w * 1.5
+            nrm = math.hypot(rx, ry)
+            if nrm > 0:
+                move = [rx / nrm, ry / nrm]
+                jit = math.sin(obs["t"] * 1.3) * 0.3
                 ang = math.atan2(move[1], move[0]) + jit
                 mag = math.hypot(move[0], move[1])
                 move = [math.cos(ang) * mag, math.sin(ang) * mag]
+            else:
+                move = [0.0, 0.0]
             # speed: faster if zone pressure, else stay quiet
             if zone_margin < 40:
                 move = [v * 0.95 for v in move]
