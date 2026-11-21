@@ -383,6 +383,9 @@ class Bot:
         in_zone = me["in_zone"]
         zone_margin = zr - math.hypot(x - zc[0], y - zc[1])
         force_zone = zone_margin < 22
+        terrain_h = self.map.height(x, y)
+        on_roof = (z - terrain_h) > 2.0
+        roof_seek = (not on_roof) and (spotted or t < 40 or nearest_threat_dist < 120)
 
         # stuck detection
         if self.last_pos is not None and dist2(pos, self.last_pos) < 0.4:
@@ -628,6 +631,53 @@ class Bot:
                 gun = me["weapons"][0]
                 if gun is not None and gun.get("cooldown", 0) <= 0.05:
                     fire[0] = True
+        elif roof_seek:
+            # seek nearest climbable roof
+            best_roof = None
+            best_rd = 1e9
+            for p in self.map.prisms:
+                xs = [pt[0] for pt in p["poly"]]
+                ys = [pt[1] for pt in p["poly"]]
+                cx = sum(xs) / len(xs)
+                cy = sum(ys) / len(ys)
+                rd = math.hypot(cx - x, cy - y)
+                if rd < best_rd and rd < 80 and 4 < (p["top"] - terrain_h) < 40:
+                    best_rd = rd
+                    best_roof = (cx, cy, p["top"])
+            if best_roof is not None:
+                dx = best_roof[0] - x
+                dy = best_roof[1] - y
+                dn = math.hypot(dx, dy)
+                if dn > 0:
+                    move = [dx / dn, dy / dn]
+                boost = True
+                if dn < 6:
+                    jump = True
+                self.mode = "roofseek"
+                aim[0] = math.atan2(dy, dx) if dn > 0 else aim[0]
+                aim[1] = 0.2
+            else:
+                # fall through to positioning
+                dx = nzc[0] - x
+                dy = nzc[1] - y
+                dn = math.hypot(dx, dy)
+                if dn > 0:
+                    move = [dx / dn, dy / dn]
+                boost = False
+                self.mode = "position"
+        elif on_roof:
+            # stay on roof, move toward zone center but avoid edges
+            dx = nzc[0] - x
+            dy = nzc[1] - y
+            dn = math.hypot(dx, dy)
+            if dn > 0:
+                move = [dx / dn * 0.6, dy / dn * 0.6]
+            else:
+                move = [0.0, 0.0]
+            boost = False
+            self.mode = "roof"
+            aim[0] = math.atan2(dy, dx) if dn > 0 else aim[0]
+            aim[1] = -0.1
         elif force_zone:
             dx = nzc[0] - x
             dy = nzc[1] - y
