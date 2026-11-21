@@ -224,6 +224,15 @@ class Bot:
             if ident == self.resource_id:
                 cost -= 19
             candidates.append((cost, kind, obj))
+        # Drones drop two cubes each and are easy to kill; farm them when no
+        # mech is close enough to punish the gunfire.
+        if not capped and enemy_distance > 110:
+            for actor in obs['mechs']:
+                if actor['kind'] != 'npc':
+                    continue
+                distance = math.dist(pos[:2], actor['pos'][:2])
+                if distance <= 85:
+                    candidates.append((distance - 80, 'npc', actor))
         for drop in obs.get('drops', ()):
             distance = math.dist(pos[:2], drop['pos'][:2])
             if (enemy_distance >= 64 and drop['holder'] in (None, me['id'])
