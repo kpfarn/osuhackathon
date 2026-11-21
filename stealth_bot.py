@@ -441,12 +441,12 @@ class Bot:
         farm_goal = None
         if not flee and not combat_target and capturing_drop is None and not danger_sound_near and not force_zone:
             # cubes (silent, lower safety threshold)
-            if obs.get("cubes") and nearest_threat_dist > 60:
+            if obs.get("cubes") and nearest_threat_dist > 40:
                 c = min(obs["cubes"], key=lambda c: dist2(c["pos"], pos))
                 if dist2(c["pos"], pos) < 150:
                     farm_goal = c["pos"]
             # crates
-            if farm_goal is None and obs.get("crates") and nearest_threat_dist > 80:
+            if farm_goal is None and obs.get("crates") and nearest_threat_dist > 60:
                 cr = min(obs["crates"], key=lambda c: dist2(c["pos"], pos))
                 if dist2(cr["pos"], pos) < 120:
                     farm_goal = cr["pos"]
