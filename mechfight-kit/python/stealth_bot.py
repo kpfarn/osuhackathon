@@ -510,9 +510,29 @@ class Bot:
                 else:
                     move = [0.0, 0.0]
                 boost = True if (spotted or nearest_threat_dist < 70 or not in_zone) else False
-                # initiate air play when spotted
-                if spotted and me.get("grounded", False):
-                    jump = True
+                # initiate air play when spotted: target nearest roof
+                if spotted:
+                    if me.get("grounded", False):
+                        jump = True
+                    # find nearest roof prism to climb
+                    best_roof = None
+                    best_rd = 1e9
+                    for p in self.map.prisms:
+                        xs = [pt[0] for pt in p["poly"]]
+                        ys = [pt[1] for pt in p["poly"]]
+                        cx = sum(xs) / len(xs)
+                        cy = sum(ys) / len(ys)
+                        rd = math.hypot(cx - x, cy - y)
+                        if rd < best_rd and rd < 35 and p["top"] > z + 3:
+                            best_rd = rd
+                            best_roof = (cx, cy, p["top"])
+                    if best_roof is not None:
+                        rx = best_roof[0] - x
+                        ry = best_roof[1] - y
+                        rn = math.hypot(rx, ry)
+                        if rn > 0:
+                            move = [rx / rn, ry / rn]
+                        boost = True
             # jump if needed to climb
             # aim at nearest threat to keep vision
             if threats:
