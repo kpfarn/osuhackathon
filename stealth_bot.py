@@ -632,6 +632,10 @@ class Bot:
             dn = math.hypot(dx, dy)
             if dn > 0:
                 move = [dx / dn, dy / dn]
+                jit = math.sin(obs["t"] * 1.3) * 0.4
+                ang = math.atan2(move[1], move[0]) + jit
+                mag = math.hypot(move[0], move[1])
+                move = [math.cos(ang) * mag, math.sin(ang) * mag]
             # silent if enemies near
             if nearest_threat_dist < 120:
                 move = [v * 0.5 for v in move]
