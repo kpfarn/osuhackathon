@@ -40,7 +40,9 @@ Track each submission here so score changes can be attributed to ideas.
 | 2 | | Survival vs coordinated squad | 0.06 | Worse; still dying early |
 | 3 | | + potential fields, cover-seeking | TBD | |
 | 4 | | + air play (jet when spotted) | TBD | |
-| 5 | | Ghost rewrite: A* nav, real cover, laser breaks | TBD | median ~400 s vs one sniper; ~330-380 s vs 2-3 |
+| 5 | `d31ce1e` | Ghost rewrite: A* nav, real cover, laser breaks | 0.42 | Survives, but outlives nobody: never kills, no cubes |
+| 6 | `5889bcd` | + accident-free LOS, NPC/mortar avoidance, cube/drop looting | TBD | |
+| 7 | | + weapon pickup and laser/lightning fire | TBD | kills 1-10 in the local squad test |
 
 > Update this table after each submission.
 
@@ -77,11 +79,15 @@ than a laser charge (0.75 s)**.
 5. **The zone is followed at depth, not at the edge**: it targets a point well
    inside the next circle, and only abandons cover for the zone when staying out
    would be certain death.
-6. **The gun is opportunistic**: fire only when already aimed, in range, and the
-   shot is not blocked. No fights are picked.
-7. **No jets.** `boost` is suppressed in the air (a held jet climbs until the
+6. **Weapons are looted and used**: a laser or lightning upgrades the bot's DPS
+   by 3-5x. The laser is charged to ~full and released at the nearest mech; the
+   lightning fires inside 45 m. The gun is still opportunistic.
+7. **Kills matter for placement.** The squad does not fight itself, so outliving
+   it means thinning it. The bot fires whenever it has a target; it does not
+   chase a fight it cannot win.
+8. **No jets.** `boost` is suppressed in the air (a held jet climbs until the
    match ends); jumps are used only to clear low steps.
-8. **Performance**: per-tick work is capped by a wall-clock budget; measured
+9. **Performance**: per-tick work is capped by a wall-clock budget; measured
    p99 is ~33 ms and max ~39 ms on the dev machine (`check.py` passes clean).
 
 Local results (`sim.py`, one sniper that tracks perfectly): median survival

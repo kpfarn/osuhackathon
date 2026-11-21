@@ -180,7 +180,14 @@ class Match:
             spawn = self._random_spawn()
         self.player = Mech(0, spawn)
         self.player.upgrades = []
-        self.player.weapons = ["gun"]
+        self.player.weapons = [{"kind": "gun"}, None]
+        self.player.charge = 0.0
+        self.pickups = []
+        kinds = ["laser", "lightning", "mortar"]
+        for i in range(12):
+            sp = self._random_spawn()
+            self.pickups.append({"id": 8000 + i, "kind": kinds[i % 3],
+                                 "pos": [sp[0], sp[1], sp[2]]})
         self.tiers = tiers or (["sniper"] * n_hunters)
         self._spawn_hunters(n_hunters)
         self.cubes = []
@@ -606,6 +613,11 @@ class Match:
             if self.sees_point(p, x, y, zc, CFG["crates"]["height"]):
                 crates.append({"id": cr[4], "pos": [round(x, 2), round(y, 2), round(zc, 2)],
                                "hp": round(cr[3], 1)})
+        pick_obs = []
+        for pk in self.pickups:
+            if self.sees_point(p, pk["pos"][0], pk["pos"][1], pk["pos"][2], 0.8):
+                pick_obs.append({"id": pk["id"], "kind": pk["kind"],
+                                 "pos": [round(v, 2) for v in pk["pos"]]})
         drop_obs = []
         for d in self.drops:
             drop_obs.append({"id": d["id"], "pos": [round(v, 2) for v in d["pos"]],
@@ -628,11 +640,16 @@ class Match:
                 "grounded": p.grounded, "cubes": p.cubes, "upgrades": [],
                 "weapons": [{"kind": "gun", "cooldown": round(p.gun_cd, 3),
                              "ammo": p.ammo, "reload": round(p.reload, 3),
-                             "stats": dict(CFG["weapons"]["gun"])}, None],
+                             "stats": dict(CFG["weapons"]["gun"])},
+                            None if p.weapons[1] is None else
+                            {"kind": p.weapons[1]["kind"],
+                             "cooldown": round(max(0.0, p.laser_cd), 3),
+                             "charge": round(p.charge, 3),
+                             "stats": dict(CFG["weapons"][p.weapons[1]["kind"]])}],
                 "in_zone": in_zone, "stats": dict(CFG["mech"]),
             },
             "mechs": vis, "projectiles": projs, "crates": crates, "cubes": cubes,
-            "pickups": [], "sounds": sounds, "beams": [], "drops": drop_obs,
+            "pickups": pick_obs, "sounds": sounds, "beams": [], "drops": drop_obs,
             "events": event_list,
             "zone": {"center": [round(z.center[0], 2), round(z.center[1], 2)],
                      "radius": round(z.radius, 1),
@@ -699,6 +716,70 @@ class Match:
                 self.player.ammo -= 1
                 self.player.gun_cd = CFG["weapons"]["gun"]["cooldown"]
                 self.sounds.append((0, "gun", self.player.pos))
+            if "take" in act and self.player.weapons[1] is None:
+                for pk in list(self.pickups):
+                    if pk["id"] != act["take"]:
+                        continue
+                    if math.hypot(pk["pos"][0] - self.player.pos[0],
+                                  pk["pos"][1] - self.player.pos[1]) <= CFG["loot"]["pickup_radius"] + 0.5:
+                        self.player.weapons[1] = {"kind": pk["kind"]}
+                        self.player.laser_cd = 0.0
+                        self.player.charge = 0.0
+                        self.pickups.remove(pk)
+                    break
+
+            w1 = self.player.weapons[1]
+            if w1 is not None:
+                kind = w1["kind"]
+                want = bool(fire and len(fire) > 1 and fire[1])
+                if kind == "laser":
+                    if want and self.player.laser_cd <= 0.0:
+                        self.player.charge += dt
+                    elif self.player.charge > 0.0 and not want:
+                        dmg = 315.0 * min(1.0, max(0.35, self.player.charge / 0.75))
+                        best = None
+                        bd = 1e9
+                        for h in self.hunters:
+                            if not h.alive:
+                                continue
+                            d = math.hypot(h.pos[0] - self.player.pos[0],
+                                           h.pos[1] - self.player.pos[1])
+                            if d > 280.0 or d > bd:
+                                continue
+                            b = math.atan2(h.pos[1] - self.player.pos[1],
+                                           h.pos[0] - self.player.pos[0])
+                            if abs(ang_diff(b, self.player.aim[0])) < 0.06 and self.los(self.player, h):
+                                bd = d
+                                best = h
+                        if best is not None:
+                            self.damage(best, dmg, "laser", 0,
+                                        math.atan2(best.pos[1] - self.player.pos[1],
+                                                   best.pos[0] - self.player.pos[0]))
+                        self.player.charge = 0.0
+                        self.player.laser_cd = 1.65
+                elif kind == "lightning":
+                    if want and self.player.laser_cd <= 0.0 and self.player.energy >= 3.0:
+                        best = None
+                        bd = 1e9
+                        for h in self.hunters:
+                            if not h.alive:
+                                continue
+                            d = math.hypot(h.pos[0] - self.player.pos[0],
+                                           h.pos[1] - self.player.pos[1])
+                            if d > 45.0 or d > bd:
+                                continue
+                            b = math.atan2(h.pos[1] - self.player.pos[1],
+                                           h.pos[0] - self.player.pos[0])
+                            if abs(ang_diff(b, self.player.aim[0])) < math.radians(15) and self.los(self.player, h):
+                                bd = d
+                                best = h
+                        if best is not None:
+                            self.damage(best, 60.0, "lightning", 0,
+                                        math.atan2(best.pos[1] - self.player.pos[1],
+                                                   best.pos[0] - self.player.pos[0]))
+                        self.player.energy = max(0.0, self.player.energy - 3.0)
+                        self.player.laser_cd = 0.25
+
             for s in evs:
                 if s.get("type") == "damaged":
                     self.player_damage += 0.0

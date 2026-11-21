@@ -773,7 +773,8 @@ class Bot:
                 p = o.get("pos")
                 if not p:
                     continue
-                self.res_mem[o["id"]] = (kind, p[0], p[1], p[2], t)
+                memkind = ("pickup_" + o["kind"]) if kind == "pickup" else kind
+                self.res_mem[o["id"]] = (memkind, p[0], p[1], p[2], t)
                 seen.add(o["id"])
         for ident, (kind, x, y, z, ts) in list(self.res_mem.items()):
             reached = (kind == "cube" and math.hypot(x - px, y - py) < 5.0
@@ -906,6 +907,21 @@ class Bot:
             self.loot = None
 
         best = drop
+        if best is None and self.weapons[1] is None:
+            bd = 1e9
+            for ident, (kind, x, y, zc, ts) in self.res_mem.items():
+                if not kind.startswith("pickup_") or kind == "pickup_gun":
+                    continue
+                if self.loot_black.get(ident, 0.0) > now:
+                    continue
+                dd = math.hypot(x - px, y - py)
+                if dd > 120.0 or not in_zone(x, y):
+                    continue
+                if kind in ("pickup_laser", "pickup_lightning"):
+                    dd -= 35.0
+                if dd < bd:
+                    bd = dd
+                    best = (x, y, "weapon", ident)
         if best is None:
             bd = 1e9
             for ident, (kind, x, y, zc, ts) in self.res_mem.items():
@@ -1251,6 +1267,8 @@ class Bot:
                     step = self._covered_step(lx, ly, threats, t, 55.0)
                 elif ld < 100.0 and self.loot[2] == "crate":
                     step = self._covered_step(lx, ly, threats, t, 50.0)
+                elif ld < 120.0 and self.loot[2] == "weapon":
+                    step = self._covered_step(lx, ly, threats, t, 60.0)
             if step is not None:
                 mode = "loot"
                 goal = step
@@ -1434,6 +1452,27 @@ class Bot:
                     if not self.arena.segment_blocked(mp, (cx, cy, cz), terrain=False):
                         fire[0] = True
         w1 = self.weapons[1]
+        if (w1 is not None and w1.get("kind") == "laser"
+                and w1.get("cooldown", 0) <= 0.02 and self.hp > 0.45 * self.max_hp
+                and not self.charge_threat):
+            lr = self.laser["range"] * 0.92 if self.laser else 260.0
+            tgt = None
+            bd = 1e9
+            for m in obs["mechs"]:
+                if m["kind"] != "mech":
+                    continue
+                d = math.hypot(m["pos"][0] - x, m["pos"][1] - y)
+                if d < bd and d < lr:
+                    bd = d
+                    tgt = m
+            if tgt is not None:
+                if w1.get("charge", 0.0) > 0.0:
+                    # hold until (almost) full, then release for max damage
+                    fire[1] = w1["charge"] < 0.70
+                else:
+                    dyaw = math.atan2(tgt["pos"][1] - y, tgt["pos"][0] - x)
+                    if abs(ang_diff(self.aim[0], dyaw)) < 0.05:
+                        fire[1] = True
         if w1 is not None and w1.get("kind") == "lightning" and w1.get("cooldown", 0) <= 0.02:
             if self.energy > 8:
                 for m in obs["mechs"]:
