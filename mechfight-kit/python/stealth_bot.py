@@ -415,22 +415,25 @@ class Bot:
         if danger_sound_near and nearest_threat_dist < 60:
             flee = True
 
-        # combat candidate: isolated low-hp enemy
-        if not flee and nearest_threat_dist < 70:
-            # isolation
-            cand = None
-            for th in sorted(threats, key=lambda t: t["dist"]):
-                if th["dist"] > 80:
-                    continue
-                # isolation: no other threat near this one
-                iso = sum(1 for oth in threats if oth["id"] != th["id"] and dist3(oth["pos"], th["pos"]) < 50) == 0
-                if not iso:
-                    continue
-                if th["hp"] < 600 or (th["aim_at_us"] is False and th["dist"] < 40):
-                    cand = th
-                    break
-            if cand is not None and me["hp"] > me["max_hp"] * 0.45:
-                combat_target = cand
+        real_threats = [th for th in threats if th.get("id", 0) >= 0]
+        # flee if outnumbered
+        if sum(1 for th in real_threats if th["dist"] < 70) >= 2:
+            flee = True
+
+        # combat candidate
+        combat_target = None
+        if not flee and real_threats:
+            nt = min(real_threats, key=lambda t: t["dist"])
+            if nt["dist"] < 120 and me["hp"] > me["max_hp"] * 0.35:
+                engage = False
+                if nt["dist"] < 60:
+                    engage = True
+                elif spotted and nt["dist"] < 120:
+                    engage = True
+                elif len([t for t in real_threats if t["dist"] < 90]) == 1 and nt["dist"] < 110:
+                    engage = True
+                if engage:
+                    combat_target = nt
 
         # farming target
         farm_goal = None
@@ -504,7 +507,7 @@ class Bot:
             ky = y - ct["pos"][1]
             kn = math.hypot(kx, ky)
             if kn > 0:
-                move = [kx / kn * 0.7, ky / kn * 0.7]
+                move = [kx / kn * 0.85, ky / kn * 0.85]
             boost = d < 25
             # fire gun
             gun = me["weapons"][0]
@@ -526,8 +529,9 @@ class Bot:
             boost = False
             # silent if enemies within 120
             if nearest_threat_dist < 120:
-                # walk slowly
-                move = [v * 0.35 for v in move]
+                move = [v * 0.5 for v in move]
+            else:
+                move = [v * 0.9 for v in move]
             self.mode = "drop"
             aim[0] = math.atan2(dy, dx) if dn > 0 else aim[0]
             aim[1] = 0.0
@@ -539,9 +543,9 @@ class Bot:
                 move = [gx / gn, gy / gn]
             # speed: silent if enemies near else normal
             if nearest_threat_dist < 120:
-                move = [v * 0.35 for v in move]
+                move = [v * 0.45 for v in move]
             else:
-                move = [v * 0.85 for v in move]
+                move = [v * 0.95 for v in move]
             self.mode = "farm"
             aim[0] = math.atan2(gy, gx) if gn > 0 else aim[0]
             aim[1] = 0.0
@@ -575,24 +579,20 @@ class Bot:
                 # mean enemy angle from zone center? rotate preferred angle by +pi/2 if enemy near preferred
                 # simple: if any enemy within 150 of preferred point, rotate
                 pass
-            # clamp goal inside zone
-            gr = min(zr * 0.55, 260.0)
-            if gr < 40:
-                gr = 40
-            gx = zc[0] + gr * math.cos(angle)
-            gy = zc[1] + gr * math.sin(angle)
-            # ensure inside current zone circle
+            # aim for next zone center (safe), with small personal offset
+            gr = min(max(nzr * 0.35, 40.0), 180.0)
+            gx = nzc[0] + gr * math.cos(self.safe_angle)
+            gy = nzc[1] + gr * math.sin(self.safe_angle)
+            # ensure inside current zone
             dgc = math.hypot(gx - zc[0], gy - zc[1])
             if dgc > zr - 20:
                 scale = (zr - 20) / max(dgc, 1e-6)
                 gx = zc[0] + (gx - zc[0]) * scale
                 gy = zc[1] + (gy - zc[1]) * scale
-            # avoid goal near enemies
-            if any(dist2([gx, gy], [e["pos"][0], e["pos"][1]]) < 70 for e in enemies):
-                angle += 1.2
-                self.safe_angle = angle
-                gx = zc[0] + gr * math.cos(angle)
-                gy = zc[1] + gr * math.sin(angle)
+            if any(dist2([gx, gy], [e["pos"][0], e["pos"][1]]) < 60 for e in enemies):
+                self.safe_angle += 1.0
+                gx = nzc[0] + gr * math.cos(self.safe_angle)
+                gy = nzc[1] + gr * math.sin(self.safe_angle)
             dx = gx - x
             dy = gy - y
             dn = math.hypot(dx, dy)
@@ -600,9 +600,9 @@ class Bot:
                 move = [dx / dn, dy / dn]
             # silent if enemies near
             if nearest_threat_dist < 120:
-                move = [v * 0.35 for v in move]
+                move = [v * 0.5 for v in move]
             else:
-                move = [v * 0.75 for v in move]
+                move = [v * 0.9 for v in move]
             # toward next zone if current zone shrinking? nudge inward
             if zone.get("shrink_start", 0) <= obs["t"] <= zone.get("shrink_end", 0):
                 # move toward next center more
