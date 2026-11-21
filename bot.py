@@ -12,7 +12,7 @@ class Bot:
     name = 'Cover Circuit'
     WEAPON_VALUE = {'gun': 0, 'mortar': 1, 'lightning': 2, 'laser': 3}
     UPGRADE_VALUE = {
-        'nanites': 12, 'plating': 11.5, 'servos': 10, 'armor': 9.5,
+        'nanites': 12, 'servos': 10, 'armor': 9.5, 'plating': 9,
         'gun_mag': 8.5, 'jets': 7.5, 'gun_damage': 7, 'laser_charge': 7,
         'reactor': 6.5, 'gun_rate': 6.5, 'gun_velocity': 6, 'capacitor': 5,
         'laser_damage': 6, 'lightning_efficiency': 6, 'lightning_range': 6,
@@ -655,10 +655,15 @@ class Bot:
             self.used_recovery_shot = False
         self.update_damage(obs)
         damage = sum(event[1] for event in self.damage)
+        finishable = any(
+            (e.get('hp', 1400) < 0.30 * e.get('max_hp', 1400)
+             and math.dist(pos[:2], e['pos'][:2]) < 140)
+            for e in enemies)
         if ((hp < 0.59 and (nearest < 115 or damage > 0))
                 or (close_count >= 2 and damage > 0.085 * me['max_hp'] and hp < 0.88)
                 or (hp < 0.46 and now < self.retreat_until)):
-            self.retreat_until = now + 2.6
+            if not (finishable and hp > 0.32):
+                self.retreat_until = now + 2.6
         retreating = now < self.retreat_until
         zone_goal, urgent = self.zone_goal(obs)
         self.remember_resources(obs)

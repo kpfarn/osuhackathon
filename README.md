@@ -65,7 +65,10 @@ Measured on the dev machine: ready in ~1.1 s, p99 ~16–18 ms, max ~40 ms,
 | 4 | | A* nav, real cover, laser breaks | 0.42 | |
 | 5 | | NPC/mortar avoidance, cube/drop looting | 0.70 | |
 | 6 | | Weapon pickup, laser/lightning, finish wounded | 0.83 | Pure-hider ceiling |
-| 7 | | Cover Circuit: combat + loot + retreat | TBD | Architecture change |
+| 7 | `b200bb1` | Cover Circuit: combat + loot + retreat | 4.33 | Architecture change |
+| 8 | `f618839` | NPC/crate farming | 3.85 | Reverted: noise/exposure cost more than the cubes |
+| 9 | `382f01b` | Plating-first upgrades | 4.25 | Reverted: within noise, slightly worse |
+| 10 | | Finish wounded targets instead of retreating | TBD | local sim: 4.67 -> 5.25 and 2.83 -> 3.50 |
 
 ## Attribution
 
