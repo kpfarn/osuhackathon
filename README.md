@@ -8,17 +8,23 @@ with the `Dockerfile` at the repository root, as required by the scorer.
 
 - `Dockerfile` — builds the image (Python 3.13, standard library only).
 - `mechfight.py` — protocol wrapper (stdin/stdout, newest-observation rule, debug drawing).
-- `stealth_bot.py` — the bot logic.
+- `arena.py` — fast static-map queries (walkability, line of sight, terrain, trees).
+- `ghost.py` — the bot logic (current submission).
+- `stealth_bot.py` — the previous bot (kept for reference; not used by the image).
+- `sim.py` — offline testbed used during development (not imported by the bot).
 - `mechfight-kit/` — original starter kit (protocol, schema, check, map, examples).
 
 ## How to test locally
 
 ```sh
 # Protocol conformance (keep mechfight-kit locally; it is gitignored)
-python3 mechfight-kit/check/check.py -- python3 -u stealth_bot.py
+python3 mechfight-kit/check/check.py -- python3 -u ghost.py
 
 # With the match's map path
-python3 mechfight-kit/check/check.py --map-dir /arena -- python3 -u stealth_bot.py
+python3 mechfight-kit/check/check.py --map-dir /arena -- python3 -u ghost.py
+
+# Behavioural testbed (dev only): 20 seeded matches against one sniper
+python3 sim.py -n 20 -t sniper
 
 # Docker build (no network at runtime)
 docker build -t ghost-bot .
@@ -34,6 +40,7 @@ Track each submission here so score changes can be attributed to ideas.
 | 2 | | Survival vs coordinated squad | 0.06 | Worse; still dying early |
 | 3 | | + potential fields, cover-seeking | TBD | |
 | 4 | | + air play (jet when spotted) | TBD | |
+| 5 | | Ghost rewrite: A* nav, real cover, laser breaks | TBD | median ~400 s vs one sniper; ~330-380 s vs 2-3 |
 
 > Update this table after each submission.
 
@@ -52,18 +59,34 @@ The goal is to stay alive for ~7 minutes while the zone closes.
 
 ## Current strategy ("Ghost")
 
-1. **No combat** except point-blank emergency fire while escaping.
-2. **No supply-drop contests** (ambushes).
-3. **Farming only when isolated** (>150 m from any enemy) — cubes increase max HP,
-   which delays being "weakest first."
-4. **Potential-field movement**: goal attraction + enemy repulsion + zone safety.
-5. **Cover-seeking when spotted**: move away from threats while pulling toward the
-   nearest building to break shared line-of-sight.
-6. **Air play**: jump + boost (jet) when spotted to gain height and escape.
-7. **Noise discipline**: walk slowly when safe, sprint/jet under pressure.
-8. **Zone survival**: escape toward next circle when within 22 m of the edge;
-   positioning targets the next zone center with a personal offset.
-9. **Stuck recovery**: if barely moving for 12 ticks, boost/jump in a new direction.
+The rewrite in `ghost.py` is built around one rule: **never be exposed for longer
+than a laser charge (0.75 s)**.
+
+1. **Cover is geometric, not reactive.** Building faces are pre-indexed as
+   standable "sites". A site is used only when line of sight from every known
+   threat is blocked (`segment_blocked` against prisms and terrain).
+2. **When a laser charges** (seen `charging`, heard `laser_charge`, or a hit just
+   landed) the bot computes the *nearest* patch of truly hidden ground and
+   sprints to it. It ignores the zone and the gun until it is hidden again.
+3. **Movement is committed.** A 5 m coarse A* raster (baked once at start) gives
+   a route; a local wall-following steer executes it with hysteresis, so the bot
+   no longer dithers between two directions.
+4. **Hidden does not mean safe.** While hidden from a known hunter the bot keeps
+   relocating 10-40 m along *covered corridors*, so a hunter arriving at the last
+   seen position does not find it standing there.
+5. **The zone is followed at depth, not at the edge**: it targets a point well
+   inside the next circle, and only abandons cover for the zone when staying out
+   would be certain death.
+6. **The gun is opportunistic**: fire only when already aimed, in range, and the
+   shot is not blocked. No fights are picked.
+7. **No jets.** `boost` is suppressed in the air (a held jet climbs until the
+   match ends); jumps are used only to clear low steps.
+8. **Performance**: per-tick work is capped by a wall-clock budget; measured
+   p99 is ~33 ms and max ~39 ms on the dev machine (`check.py` passes clean).
+
+Local results (`sim.py`, one sniper that tracks perfectly): median survival
+~400 s, with most matches ending only when the zone itself collapses. Against
+two or three snipers the median is ~330-380 s. The previous bot died at ~40 s.
 
 ## Idea backlog (consider every angle)
 
