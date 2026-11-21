@@ -306,6 +306,10 @@ class Bot:
         self.safe_angle = self.rng.uniform(0, 2 * math.pi)
         self.flee_until = 0.0
         self.mode = "position"
+        self.last_pos = None
+        self.stuck_ticks = 0
+        self.stuck_dir = None
+        self.stuck_remaining = 0
         self.eye_height = self.cfg["mech"].get("eye_height", 8.0)
         # mech stats defaults
         self.walk_speed = self.cfg["mech"].get("walk_speed", 11.7)
@@ -379,6 +383,18 @@ class Bot:
         in_zone = me["in_zone"]
         zone_margin = zr - math.hypot(x - zc[0], y - zc[1])
         force_zone = zone_margin < 22
+
+        # stuck detection
+        if self.last_pos is not None and dist2(pos, self.last_pos) < 0.4:
+            self.stuck_ticks += 1
+        else:
+            self.stuck_ticks = 0
+        self.last_pos = [x, y, z]
+        if self.stuck_ticks > 12 and self.stuck_remaining <= 0:
+            self.stuck_remaining = 20
+            self.stuck_dir = self.rng.uniform(0, 2 * math.pi)
+        if self.stuck_remaining > 0:
+            self.stuck_remaining -= 1
 
         move = [0.0, 0.0]
         boost = False
@@ -493,6 +509,11 @@ class Bot:
                     if gun is not None and gun.get("cooldown", 0) <= 0.05:
                         fire[0] = True
             self.mode = "flee"
+        elif self.stuck_remaining > 0 and not flee and combat_target is None:
+            move = [math.cos(self.stuck_dir), math.sin(self.stuck_dir)]
+            boost = True
+            jump = True
+            self.mode = "unstick"
         elif combat_target is not None:
             ct = combat_target
             # aim with lead
