@@ -509,7 +509,10 @@ class Bot:
                     move = [rx / nrm, ry / nrm]
                 else:
                     move = [0.0, 0.0]
-                boost = (nearest_threat_dist < 70) or (not in_zone)
+                boost = True if (spotted or nearest_threat_dist < 70 or not in_zone) else False
+                # initiate air play when spotted
+                if spotted and me.get("grounded", False):
+                    jump = True
             # jump if needed to climb
             # aim at nearest threat to keep vision
             if threats:
