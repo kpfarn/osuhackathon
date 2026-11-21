@@ -211,7 +211,8 @@ class Bot:
                 elif not early and next_cube_unlocks and enemy_distance > 100:
                     limit, reward = 92, 83
             else:
-                if me['cubes'] >= 6 or enemy_distance < 85:
+                # keep opening crates until the cube stat cap, not just six
+                if me['cubes'] >= cube_rules['stat_cap'] or enemy_distance < 85:
                     continue
                 limit, reward = (107, 47) if early else (70, 25)
                 if gearing_up:
