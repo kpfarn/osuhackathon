@@ -636,11 +636,13 @@ class Bot:
                 ang = math.atan2(move[1], move[0]) + jit
                 mag = math.hypot(move[0], move[1])
                 move = [math.cos(ang) * mag, math.sin(ang) * mag]
-            # silent if enemies near
-            if nearest_threat_dist < 120:
+            # speed: faster if zone pressure, else stay quiet
+            if zone_margin < 40:
+                move = [v * 0.95 for v in move]
+            elif nearest_threat_dist < 120:
                 move = [v * 0.5 for v in move]
             else:
-                move = [v * 0.9 for v in move]
+                move = [v * 0.35 for v in move]
             # toward next zone if current zone shrinking? nudge inward
             if zone.get("shrink_start", 0) <= obs["t"] <= zone.get("shrink_end", 0):
                 # move toward next center more
