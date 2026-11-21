@@ -405,17 +405,8 @@ class Bot:
 
         # --- flee conditions ---
         # supply drop capture (computed before flee)
+        # disable supply drops: too contested by coordinated squad
         capturing_drop = None
-        for drop in obs.get("drops", []):
-            if drop.get("lands_in", 1) > 0:
-                continue
-            dd = dist3(drop["pos"], pos)
-            if dd > 220:
-                continue
-            if any(dist3(e["pos"], drop["pos"]) < 70 for e in enemies):
-                continue
-            capturing_drop = drop
-            break
 
         flee = False
         if nearest_threat_dist < 30:
@@ -438,24 +429,12 @@ class Bot:
         if sum(1 for th in real_threats if th["dist"] < 70) >= 2:
             flee = True
 
-        # combat candidate
+        # combat disabled: survival vs coordinated squad; only emergency self-defense while fleeing
         combat_target = None
-        if not flee and real_threats:
-            nt = min(real_threats, key=lambda t: t["dist"])
-            if nt["dist"] < 120 and me["hp"] > me["max_hp"] * 0.35:
-                engage = False
-                if nt["dist"] < 60:
-                    engage = True
-                elif spotted and nt["dist"] < 120:
-                    engage = True
-                elif len([t for t in real_threats if t["dist"] < 90]) == 1 and nt["dist"] < 110:
-                    engage = True
-                if engage:
-                    combat_target = nt
 
         # farming target
         farm_goal = None
-        if not flee and not combat_target and capturing_drop is None and not danger_sound_near and not force_zone:
+        if not flee and not combat_target and capturing_drop is None and not danger_sound_near and not force_zone and nearest_threat_dist > 150:
             # cubes (silent, lower safety threshold)
             if obs.get("cubes") and nearest_threat_dist > 40:
                 c = min(obs["cubes"], key=lambda c: dist2(c["pos"], pos))
@@ -482,22 +461,42 @@ class Bot:
 
         # positioning goal
         if flee:
-            # repulsion
-            rx, ry = 0.0, 0.0
-            for th in threats:
-                if th["dist"] < 120:
-                    w = 1.0 / (th["dist"] + 5.0)
-                    rx += (x - th["pos"][0]) * w
-                    ry += (y - th["pos"][1]) * w
-            if not in_zone:
-                rx += (zc[0] - x) * 0.6
-                ry += (zc[1] - y) * 0.6
-            nrm = math.hypot(rx, ry)
-            if nrm > 0:
-                move = [rx / nrm, ry / nrm]
+            # if spotted, seek nearest cover (building) to break shared vision
+            cover = None
+            if spotted:
+                best_d = 1e9
+                for p in self.map.prisms:
+                    xs = [pt[0] for pt in p["poly"]]
+                    ys = [pt[1] for pt in p["poly"]]
+                    cx = sum(xs) / len(xs)
+                    cy = sum(ys) / len(ys)
+                    d = math.hypot(cx - x, cy - y)
+                    if d < best_d and d < 80:
+                        best_d = d
+                        cover = (cx, cy)
+            if cover is not None:
+                dx = cover[0] - x
+                dy = cover[1] - y
+                dn = math.hypot(dx, dy)
+                if dn > 0:
+                    move = [dx / dn, dy / dn]
+                boost = True
             else:
-                move = [0.0, 0.0]
-            boost = (nearest_threat_dist < 70) or (not in_zone)
+                rx, ry = 0.0, 0.0
+                for th in threats:
+                    if th["dist"] < 120:
+                        w = 1.0 / (th["dist"] + 5.0)
+                        rx += (x - th["pos"][0]) * w
+                        ry += (y - th["pos"][1]) * w
+                if not in_zone:
+                    rx += (zc[0] - x) * 0.6
+                    ry += (zc[1] - y) * 0.6
+                nrm = math.hypot(rx, ry)
+                if nrm > 0:
+                    move = [rx / nrm, ry / nrm]
+                else:
+                    move = [0.0, 0.0]
+                boost = (nearest_threat_dist < 70) or (not in_zone)
             # jump if needed to climb
             # aim at nearest threat to keep vision
             if threats:
