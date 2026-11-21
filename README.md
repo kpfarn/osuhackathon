@@ -14,7 +14,7 @@ with the `Dockerfile` at the repository root, as required by the scorer.
 ## How to test locally
 
 ```sh
-# Protocol conformance (must pass before submission)
+# Protocol conformance (keep mechfight-kit locally; it is gitignored)
 python3 mechfight-kit/check/check.py -- python3 -u stealth_bot.py
 
 # With the match's map path
