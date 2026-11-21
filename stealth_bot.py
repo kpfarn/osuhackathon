@@ -377,6 +377,8 @@ class Bot:
         nzc = zone["next_center"]
         nzr = zone["next_radius"]
         in_zone = me["in_zone"]
+        zone_margin = zr - math.hypot(x - zc[0], y - zc[1])
+        force_zone = zone_margin < 22
 
         move = [0.0, 0.0]
         boost = False
@@ -437,19 +439,19 @@ class Bot:
 
         # farming target
         farm_goal = None
-        if not flee and not combat_target and capturing_drop is None and nearest_threat_dist > 100 and not danger_sound_near:
-            # cubes (silent)
-            if obs.get("cubes"):
+        if not flee and not combat_target and capturing_drop is None and not danger_sound_near and not force_zone:
+            # cubes (silent, lower safety threshold)
+            if obs.get("cubes") and nearest_threat_dist > 60:
                 c = min(obs["cubes"], key=lambda c: dist2(c["pos"], pos))
-                if dist2(c["pos"], pos) < 120:
+                if dist2(c["pos"], pos) < 150:
                     farm_goal = c["pos"]
             # crates
-            if farm_goal is None and obs.get("crates"):
+            if farm_goal is None and obs.get("crates") and nearest_threat_dist > 80:
                 cr = min(obs["crates"], key=lambda c: dist2(c["pos"], pos))
                 if dist2(cr["pos"], pos) < 120:
                     farm_goal = cr["pos"]
             # npcs (noisy)
-            if farm_goal is None and npcs:
+            if farm_goal is None and npcs and nearest_threat_dist > 90:
                 n = min(npcs, key=lambda n: dist3(n["pos"], pos))
                 if dist3(n["pos"], pos) < 160:
                     farm_goal = n["pos"]
@@ -570,6 +572,18 @@ class Bot:
                 gun = me["weapons"][0]
                 if gun is not None and gun.get("cooldown", 0) <= 0.05:
                     fire[0] = True
+        elif force_zone:
+            dx = nzc[0] - x
+            dy = nzc[1] - y
+            dn = math.hypot(dx, dy)
+            if dn > 0:
+                move = [dx / dn, dy / dn]
+            else:
+                move = [0.0, 0.0]
+            boost = zone_margin < 8
+            self.mode = "zone"
+            aim[0] = math.atan2(dy, dx) if dn > 0 else aim[0]
+            aim[1] = 0.0
         else:
             # positioning toward stealth spot
             # desired angle adjusted away from enemies
