@@ -12,7 +12,7 @@ class Bot:
     name = 'Cover Circuit'
     WEAPON_VALUE = {'gun': 0, 'mortar': 1, 'lightning': 2, 'laser': 3}
     UPGRADE_VALUE = {
-        'nanites': 12, 'servos': 10, 'armor': 9.5, 'plating': 9,
+        'nanites': 12, 'plating': 11.5, 'servos': 10, 'armor': 9.5,
         'gun_mag': 8.5, 'jets': 7.5, 'gun_damage': 7, 'laser_charge': 7,
         'reactor': 6.5, 'gun_rate': 6.5, 'gun_velocity': 6, 'capacitor': 5,
         'laser_damage': 6, 'lightning_efficiency': 6, 'lightning_range': 6,
@@ -211,8 +211,7 @@ class Bot:
                 elif not early and next_cube_unlocks and enemy_distance > 100:
                     limit, reward = 92, 83
             else:
-                # keep opening crates until the cube stat cap, not just six
-                if me['cubes'] >= cube_rules['stat_cap'] or enemy_distance < 85:
+                if me['cubes'] >= 6 or enemy_distance < 85:
                     continue
                 limit, reward = (107, 47) if early else (70, 25)
                 if gearing_up:
@@ -225,15 +224,6 @@ class Bot:
             if ident == self.resource_id:
                 cost -= 19
             candidates.append((cost, kind, obj))
-        # Drones drop two cubes each and are easy to kill; farm them when no
-        # mech is close enough to punish the gunfire.
-        if not capped and enemy_distance > 110:
-            for actor in obs['mechs']:
-                if actor['kind'] != 'npc':
-                    continue
-                distance = math.dist(pos[:2], actor['pos'][:2])
-                if distance <= 85:
-                    candidates.append((distance - 80, 'npc', actor))
         for drop in obs.get('drops', ()):
             distance = math.dist(pos[:2], drop['pos'][:2])
             if (enemy_distance >= 64 and drop['holder'] in (None, me['id'])
