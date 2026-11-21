@@ -384,8 +384,8 @@ class Bot:
         zone_margin = zr - math.hypot(x - zc[0], y - zc[1])
         force_zone = zone_margin < 22
         terrain_h = self.map.height(x, y)
-        on_roof = (z - terrain_h) > 2.0
-        roof_seek = (not on_roof) and (spotted or t < 40 or nearest_threat_dist < 120)
+        on_roof = False
+        roof_seek = False
 
         # stuck detection
         if self.last_pos is not None and dist2(pos, self.last_pos) < 0.4:
@@ -437,7 +437,9 @@ class Bot:
 
         # farming target
         farm_goal = None
-        if not flee and not combat_target and capturing_drop is None and not danger_sound_near and not force_zone and nearest_threat_dist > 150:
+        if False:  # disable farming for runner variant
+            pass
+        if not flee and not combat_target and capturing_drop is None and not danger_sound_near and not force_zone and nearest_threat_dist > 150 and False:
             # cubes (silent, lower safety threshold)
             if obs.get("cubes") and nearest_threat_dist > 40:
                 c = min(obs["cubes"], key=lambda c: dist2(c["pos"], pos))
@@ -542,7 +544,7 @@ class Bot:
                 nt = min(threats, key=lambda t: t["dist"])
                 aim[0] = math.atan2(nt["pos"][1] - y, nt["pos"][0] - x)
                 aim[1] = 0.0
-                if nt["dist"] < 70 and not nt.get("sound"):
+                if nt["dist"] < 20 and not nt.get("sound"):
                     gun = me["weapons"][0]
                     if gun is not None and gun.get("cooldown", 0) <= 0.05:
                         fire[0] = True
@@ -750,13 +752,9 @@ class Bot:
                 move = [math.cos(ang) * mag, math.sin(ang) * mag]
             else:
                 move = [0.0, 0.0]
-            # speed: faster if zone pressure, else stay quiet
-            if zone_margin < 40:
-                move = [v * 0.95 for v in move]
-            elif nearest_threat_dist < 120:
-                move = [v * 0.5 for v in move]
-            else:
-                move = [v * 0.35 for v in move]
+            # runner: full speed
+            move = [v * 1.0 for v in move]
+            boost = True if (nearest_threat_dist < 120 or zone_margin < 40) else False
             # toward next zone if current zone shrinking? nudge inward
             if zone.get("shrink_start", 0) <= obs["t"] <= zone.get("shrink_end", 0):
                 # move toward next center more
