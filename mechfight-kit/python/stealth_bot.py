@@ -475,11 +475,24 @@ class Bot:
                         best_d = d
                         cover = (cx, cy)
             if cover is not None:
+                # move away from threat and toward cover
                 dx = cover[0] - x
                 dy = cover[1] - y
                 dn = math.hypot(dx, dy)
+                rx, ry = 0.0, 0.0
+                for th in threats:
+                    if th["dist"] < 120:
+                        w = 1.0 / (th["dist"] + 5.0)
+                        rx += (x - th["pos"][0]) * w
+                        ry += (y - th["pos"][1]) * w
                 if dn > 0:
-                    move = [dx / dn, dy / dn]
+                    rx += (cover[0] - x) / dn * 0.8
+                    ry += (cover[1] - y) / dn * 0.8
+                nrm = math.hypot(rx, ry)
+                if nrm > 0:
+                    move = [rx / nrm, ry / nrm]
+                else:
+                    move = [dx / dn, dy / dn] if dn > 0 else [0.0, 0.0]
                 boost = True
             else:
                 rx, ry = 0.0, 0.0
