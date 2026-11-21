@@ -19,6 +19,7 @@ seen*, and for breaking line of sight within a fraction of a second when it is.
 
 Geometry comes from arena.py; this file is pure decision making.
 """
+import gc
 import heapq
 import math
 import random
@@ -65,6 +66,7 @@ class Bot:
 
     # ---------------------------------------------------------------- setup
     def __init__(self, hello):
+        gc.disable()  # no cyclic garbage; avoids multi-tick GC pauses
         cfg = hello["config"]
         self.cfg = cfg
         self.rng = random.Random(int(hello["seed"]) ^ (int(hello["slot"]) * 7919))
@@ -140,6 +142,16 @@ class Bot:
         self.esc_goal = None
         self.esc_t = -99.0
         self.zone_forced = False
+        self.loot = None
+        self.loot_t = -99.0
+        self.loot_deadline = 0.0
+        self.loot_dead = {}
+        self.loot_black = {}
+        self.loot_step = None
+        self.loot_step_t = -99.0
+        self.mortar_danger = False
+        self.crate_aim = None
+        self.res_mem = {}
 
         # execution
         self.mode = "init"
@@ -214,7 +226,18 @@ class Bot:
     # -------------------------------------------------------------- threats
     def _update_threats(self, obs):
         t = obs["t"]
+        npcs = []
         for m in obs["mechs"]:
+            if m["kind"] == "npc":
+                px0, py0 = self.pos[0], self.pos[1]
+                d = math.hypot(m["pos"][0] - px0, m["pos"][1] - py0)
+                if d < 55.0:
+                    npcs.append({"id": m["id"], "pos": list(m["pos"]),
+                                 "vel": m.get("vel", [0, 0, 0]),
+                                 "w": 0.5, "weapons": [], "charging": False,
+                                 "hp": m.get("hp"), "real": False,
+                                 "eye": 2.0})
+                continue
             if m["kind"] != "mech":
                 continue
             self.known[m["id"]] = {
@@ -227,7 +250,7 @@ class Bot:
                 del self.known[k]
 
         px, py = self.pos[0], self.pos[1]
-        self.enemies = []
+        self.enemies = list(npcs)
         self.seen_real = False
         for k, e in self.known.items():
             self.seen_real = True
@@ -289,7 +312,7 @@ class Bot:
             key = (n, int(x), int(y))
             hit = self._exp_cache.get(key)
             if hit is None:
-                eye = (ex, ey, ez + self.eye_h)
+                eye = (ex, ey, ez + e.get("eye", self.eye_h))
                 hit = a.visible(eye, centre, top, terrain=True)
                 self._exp_cache[key] = hit
             if hit:
@@ -312,7 +335,7 @@ class Bot:
             key = (n, int(x), int(y))
             hit = self._exp_cache.get(key)
             if hit is None:
-                eye = (ex, ey, ez + self.eye_h)
+                eye = (ex, ey, ez + e.get("eye", self.eye_h))
                 hit = a.visible(eye, centre, top, terrain=True)
                 self._exp_cache[key] = hit
             if hit:
@@ -356,8 +379,8 @@ class Bot:
             for i in range(self.nnx):
                 x = a.gx0 + (i + 0.5) * g
                 ok = True
-                for ox, oy in ((0.0, 0.0), (2.0, 0.0), (-2.0, 0.0),
-                               (0.0, 2.0), (0.0, -2.0)):
+                for ox, oy in ((0.0, 0.0), (2.6, 0.0), (-2.6, 0.0),
+                               (0.0, 2.6), (0.0, -2.6)):
                     w, _ = a.walkable(x + ox, y + oy, a.height_fast(x + ox, y + oy))
                     if not w:
                         ok = False
@@ -526,9 +549,9 @@ class Bot:
         nr = z["next_radius"]
         ss = z.get("shrink_start", 1e9)
         # stay ahead of a shrink once travelling would be tight
-        d_next = math.hypot(nx - px, ny - py)
-        travel = max(0.0, d_next - max(nr - 14.0, 0.0)) / max(self.walk, 1.0)
-        use_next = nr < r - 1.0 and t >= ss - (travel * 1.25 + 6.0)
+        # always pre-position into the next circle; camping on the rim loses
+        # the supply drops and the final HP race
+        use_next = nr < r - 1.0
         tc = (nx, ny) if use_next else (cx, cy)
         tr = nr if use_next else r
         if tr <= 1.0:
@@ -674,6 +697,20 @@ class Bot:
             ux, uy = unit(gx - px, gy - py)
         return (px + ux * 26.0, py + uy * 26.0)
 
+    def _covered_step(self, tx, ty, threats, now, radius=60.0):
+        """One hidden hop toward (tx, ty); None if no covered hop exists."""
+        if (self.loot_step is not None and now - self.loot_step_t < 1.2
+                and math.hypot(self.loot_step[0] - self.pos[0],
+                               self.loot_step[1] - self.pos[1]) > 3.0):
+            return self.loot_step
+        s = self._pick_hidden(tx, ty, threats, radius, min_dist=5.0,
+                              menace=0.5, corridor=True)
+        if s is None:
+            return None
+        self.loot_step = (s.x, s.y)
+        self.loot_step_t = now
+        return self.loot_step
+
     def _hide_goal(self, threats, gx, gy, now):
         """While hidden: hold, or relocate along covered corridors."""
         px, py = self.pos[0], self.pos[1]
@@ -692,12 +729,215 @@ class Bot:
         ns = self._pick_hidden(gx, gy, threats, 58.0, min_dist=9.0,
                                menace=0.8, corridor=True, near_ok=0.0)
         if ns is None:
+            # no fully covered hop: take a hidden site even if the walk is not
+            ns = self._pick_hidden(gx, gy, threats, 72.0, min_dist=9.0,
+                                   menace=0.5, corridor=False)
+        if ns is None:
+            # still nothing: never stand still next to a known hunter
+            cands = self.near_sites(px, py, 65.0)
+            best = None
+            bestscore = -INF
+            for cand in cands:
+                d = math.hypot(cand.x - px, cand.y - py)
+                if d < 10.0:
+                    continue
+                nd = min((math.hypot(cand.x - e["pos"][0], cand.y - e["pos"][1])
+                          for e in threats), default=999.0)
+                sc = nd - 0.4 * d
+                if sc > bestscore:
+                    bestscore = sc
+                    best = cand
+            if best is not None:
+                ns = best
+        if ns is None:
+            # last resort: back away from the nearest threat
+            e = threats[0]
+            ux, uy = unit(px - e["pos"][0], py - e["pos"][1])
+            if ux == 0.0 and uy == 0.0:
+                ux, uy = math.cos(now), math.sin(now)
             self.anchor = None
-            return None
+            return (px + ux * 18.0, py + uy * 18.0)
         self.anchor = ns
         self.anchor_t = now
-        self.anchor_hold = 3.0 + self.rng.random() * 5.0
+        self.anchor_hold = 0.8 + self.rng.random() * 1.4
         return (ns.x, ns.y)
+
+    def _remember_resources(self, obs):
+        """Static loot stays useful after the torso turns away."""
+        t = obs["t"]
+        px, py = self.pos[0], self.pos[1]
+        seen = set()
+        for field, kind in (("crates", "crate"), ("cubes", "cube"),
+                            ("pickups", "pickup")):
+            for o in obs.get(field, ()):
+                p = o.get("pos")
+                if not p:
+                    continue
+                self.res_mem[o["id"]] = (kind, p[0], p[1], p[2], t)
+                seen.add(o["id"])
+        for ident, (kind, x, y, z, ts) in list(self.res_mem.items()):
+            reached = (kind == "cube" and math.hypot(x - px, y - py) < 5.0
+                       and ident not in seen)
+            gone = t - ts > 75.0
+            if reached or gone:
+                del self.res_mem[ident]
+
+    def _pick_loot(self, obs, threats, nd, now, exp_here, can_move):
+        """Power cubes are max HP, and max HP decides the final collapse."""
+        px, py = self.pos[0], self.pos[1]
+        if self.loot is not None:
+            dead = self.loot_dead.get(self.loot[3], now + 30.0)
+            if now > dead:
+                self.loot_black[self.loot[3]] = now + 35.0
+                self.loot = None
+        z = obs["zone"]
+        c = z["center"]
+        r = z["radius"]
+        nc = z["next_center"]
+        nr = z.get("next_radius", 0.0)
+
+        def in_zone(x, y):
+            if nr > 1.0 and math.hypot(x - nc[0], y - nc[1]) <= nr - 5.0:
+                return True
+            return math.hypot(x - c[0], y - c[1]) <= max(r - 6.0, 4.0)
+
+        # ---- crates: only from cover, and only with some breathing room
+        ca = None
+        if ((exp_here <= 0.0 or (nd > 150.0 and self.hp > 0.65 * self.max_hp))
+                and (not threats or nd > 95.0)):
+            cad = 1e9
+            muzzle = (px, py, self.pos[2] + self.muzzle_h)
+            for ident, (kind, x, y, zc, ts) in self.res_mem.items():
+                if kind != "crate":
+                    continue
+                dd = math.hypot(x - px, y - py)
+                if dd > 70.0 or dd > cad or not in_zone(x, y):
+                    continue
+                if not self.arena.segment_blocked(muzzle, (x, y, zc + 1.1),
+                                                  terrain=False):
+                    cad = dd
+                    ca = (x, y, zc + 1.1)
+        # drones drop two cubes each; they are easy and do not count for placement
+        if ca is None and (not threats or nd > 170.0):
+            for m in obs.get("mechs", ()):
+                if m.get("kind") != "npc":
+                    continue
+                x, y, zc = m["pos"]
+                dd = math.hypot(x - px, y - py)
+                if dd > 50.0 or m.get("hp", 999.0) > 360.0:
+                    continue
+                ca = (x, y, zc + 1.5)
+                break
+        self.crate_aim = ca
+
+        # a supply drop is the jackpot: three cubes plus a full heal.
+        # It is worth a covered approach even while hiding.
+        drop = None
+        bd = 1e9
+        for d in obs.get("drops", []):
+            if d.get("lands_in", 0.0) > 26.0 or d.get("holder") is not None:
+                continue
+            x, y = d["pos"][0], d["pos"][1]
+            dd = math.hypot(x - px, y - py)
+            did = d["id"]
+            if (dd > 155.0 or not in_zone(x, y)
+                    or self.loot_black.get(did, 0.0) > now):
+                continue
+            near = min((math.hypot(e["pos"][0] - x, e["pos"][1] - y)
+                        for e in threats), default=999.0)
+            if near < 120.0:
+                continue
+            if dd < bd:
+                bd = dd
+                drop = (x, y, "drop", did)
+
+        if not can_move:
+            if drop is not None:
+                did = drop[3]
+                if did not in self.loot_dead:
+                    self.loot_dead[did] = now + 20.0
+                if now <= self.loot_dead[did]:
+                    self.loot = drop
+                    self.loot_t = now
+                else:
+                    self.loot_black[did] = now + 35.0
+                return
+            # grab a cube if we can reach it without breaking cover
+            best = None
+            bd = 115.0 if self.cubes < 3 else 82.0
+            for ident, (kind, x, y, zc, ts) in self.res_mem.items():
+                if kind != "cube":
+                    continue
+                dd = math.hypot(x - px, y - py)
+                if (dd < bd and in_zone(x, y)
+                        and self.loot_black.get(ident, 0.0) <= now):
+                    bd = dd
+                    best = (x, y, "cube", ident)
+            if best is None and self.cubes < 8:
+                bd = 1e9
+                for ident, (kind, x, y, zc, ts) in self.res_mem.items():
+                    if kind != "crate" or self.loot_black.get(ident, 0.0) > now:
+                        continue
+                    dd = math.hypot(x - px, y - py)
+                    if dd > 85.0 or not in_zone(x, y):
+                        continue
+                    if dd - 18.0 < bd:
+                        bd = dd - 18.0
+                        ux, uy = unit(px - x, py - y)
+                        best = (x + ux * 22.0, y + uy * 22.0, "crate", ident)
+            if best is not None:
+                bid = best[3]
+                if bid not in self.loot_dead:
+                    self.loot_dead[bid] = now + 13.0
+                if now <= self.loot_dead[bid]:
+                    self.loot = best
+                    self.loot_t = now
+            elif self.loot is not None and (now - self.loot_t > 4.0
+                                           or math.hypot(self.loot[0] - px,
+                                                         self.loot[1] - py) < 2.5):
+                self.loot = None
+            return
+
+        cur = self.loot
+        if cur is not None:
+            if (now - self.loot_t < 5.0 and in_zone(cur[0], cur[1])
+                    and math.hypot(cur[0] - px, cur[1] - py) > 2.5):
+                return
+            self.loot = None
+
+        best = drop
+        if best is None:
+            bd = 1e9
+            for ident, (kind, x, y, zc, ts) in self.res_mem.items():
+                if self.loot_black.get(ident, 0.0) > now:
+                    continue
+                if kind == "cube":
+                    dd = math.hypot(x - px, y - py)
+                    if (dd > (115.0 if self.cubes < 3 else 82.0)
+                            or not in_zone(x, y)):
+                        continue
+                    if dd < bd:
+                        bd = dd
+                        best = (x, y, "cube", ident)
+                elif kind == "crate" and self.cubes < 8:
+                    dd = math.hypot(x - px, y - py)
+                    if (dd > (95.0 if self.cubes < 3 else 70.0)
+                            or not in_zone(x, y)):
+                        continue
+                    if dd - 18.0 < bd:
+                        bd = dd - 18.0
+                        ux, uy = unit(px - x, py - y)
+                        best = (x + ux * 22.0, y + uy * 22.0, "crate", ident)
+        if best is not None:
+            bid = best[3]
+            if bid not in self.loot_dead:
+                self.loot_dead[bid] = now + (20.0 if best[2] == "drop" else 13.0)
+            elif now > self.loot_dead[bid]:
+                self.loot_black[bid] = now + 35.0
+                best = None
+        if best is not None:
+            self.loot = best
+            self.loot_t = now
 
     def _roam_goal(self, gx, gy, now):
         """No hunter known: settle in cover, occasionally move on."""
@@ -720,7 +960,7 @@ class Bot:
             tx = px + math.cos(a) * rr
             ty = py + math.sin(a) * rr
             rad = 48.0
-            hold = 12.0 + self.rng.random() * 12.0
+            hold = 4.0 + self.rng.random() * 5.0
         cands = self.near_sites(px, py, rad)
         best = None
         bd = INF
@@ -762,7 +1002,7 @@ class Bot:
             if not self._passable(px, py, z):
                 return False
             # lateral clearance, so a wall edge does not catch the hull
-            ox, oy = -dy * 1.6, dx * 1.6
+            ox, oy = -dy * 2.4, dx * 2.4
             if f > 0.9:
                 if not self._passable(px + ox, py + oy, z):
                     return False
@@ -815,19 +1055,43 @@ class Bot:
 
     # ------------------------------------------------------------ dodging
     def _dodge(self, obs):
-        px, py = self.pos[0], self.pos[1]
+        px, py, pz = self.pos
         best = None
         bw = 0.0
+        urgent = False
         for pr in obs.get("projectiles", []):
             x, y, z = pr["pos"]
             vx, vy, vz = pr["vel"]
+            if pr.get("kind") == "mortar":
+                # ballistic landing point
+                g = 22.0
+                disc = vz * vz - 2.0 * g * (z - pz)
+                if disc < 0.0:
+                    continue
+                t = (vz + math.sqrt(disc)) / g
+                if not (0.0 < t < 3.6):
+                    continue
+                lx = x + vx * t
+                ly = y + vy * t
+                d = math.hypot(lx - px, ly - py)
+                if d > 11.0:
+                    continue
+                ux, uy = unit(px - lx, py - ly)
+                if ux == 0.0 and uy == 0.0:
+                    ux, uy = unit(-vy, vx)
+                w = (11.0 - d) / 11.0
+                if w > bw:
+                    bw = w
+                    best = (ux, uy)
+                    urgent = True
+                continue
             rx = px - x
             ry = py - y
             vv = vx * vx + vy * vy
             if vv < 1.0:
                 continue
             tca = (rx * vx + ry * vy) / vv
-            if tca < 0.0 or tca > 0.45:
+            if tca < 0.0 or tca > 0.6:
                 continue
             mx = rx + vx * tca
             my = ry + vy * tca
@@ -841,6 +1105,7 @@ class Bot:
             if w > bw:
                 bw = w
                 best = (nx, ny)
+        self.mortar_danger = urgent
         return best
 
     # ----------------------------------------------------------------- act
@@ -887,6 +1152,7 @@ class Bot:
                 self.last_damage_t = t
 
         self._update_threats(obs)
+        self._remember_resources(obs)
         threats = self.threats
         nearest = threats[0] if threats else None
         nd = math.hypot(nearest["pos"][0] - x, nearest["pos"][1] - y) if nearest else INF
@@ -969,11 +1235,36 @@ class Bot:
         elif nearest is not None and nd < 300.0:
             mode = "hide"
             self.esc_goal = None
-            goal = self._hide_goal(threats, gx, gy, t)
+            self._pick_loot(obs, threats, nd, t, exp_here, False)
+            step = None
+            if self.loot is not None:
+                lx, ly = self.loot[0], self.loot[1]
+                ld = math.hypot(lx - x, ly - y)
+                if ld < 18.0 and self._corridor_hidden(x, y, lx, ly, threats[:1]):
+                    step = (lx, ly)
+                elif ld < 210.0 and self.loot[2] == "drop":
+                    near = min((math.hypot(e["pos"][0] - lx, e["pos"][1] - ly)
+                                for e in threats), default=999.0)
+                    if near > 120.0:
+                        step = self._covered_step(lx, ly, threats, t)
+                elif ld < 110.0 and self.loot[2] == "cube":
+                    step = self._covered_step(lx, ly, threats, t, 55.0)
+                elif ld < 100.0 and self.loot[2] == "crate":
+                    step = self._covered_step(lx, ly, threats, t, 50.0)
+            if step is not None:
+                mode = "loot"
+                goal = step
+            else:
+                goal = self._hide_goal(threats, gx, gy, t)
         else:
             mode = "roam"
             self.esc_goal = None
-            goal = self._roam_goal(gx, gy, t)
+            self._pick_loot(obs, threats, nd, t, exp_here, True)
+            if self.loot is not None and not self.zone_forced:
+                mode = "loot"
+                goal = (self.loot[0], self.loot[1])
+            else:
+                goal = self._roam_goal(gx, gy, t)
 
         # zone keeps a veto when it is lethal to linger
         if mode in ("hide", "roam") and self._zone_urgent(obs, gx, gy):
@@ -985,6 +1276,9 @@ class Bot:
             else:
                 goal = (gx, gy)
             boost = self.energy > 15
+        if mode not in ("roam", "loot", "hide"):
+            self.loot = None
+            self.crate_aim = None
         self.goal = goal
         self.goal_kind = mode
 
@@ -994,7 +1288,8 @@ class Bot:
 
         # ---- incoming bullets ------------------------------------------
         dodge = self._dodge(obs)
-        if dodge is not None and mode not in ("break", "flee"):
+        if dodge is not None and (mode not in ("break", "flee")
+                                  or (self.mortar_danger and mode != "zone!")):
             mode = "dodge"
             move = [dodge[0], dodge[1]]
             goal = None
@@ -1012,12 +1307,12 @@ class Bot:
             else:
                 self.stuck = 0
         self.prev_pos = (x, y)
-        if self.stuck > 8 and t - self.stuck_t > 1.2:
+        if self.stuck > 5 and t - self.stuck_t > 0.7:
             self.stuck_t = t
             self.stuck = 0
-            self.escape_until = t + 0.9
+            self.escape_until = t + 1.1
             base = math.atan2(move[1], move[0]) if (move[0] or move[1]) else self.rng.random() * TAU
-            self.escape_dir = base + self.rng.choice((1.0, -1.0)) * self.rng.uniform(1.3, 2.4)
+            self.escape_dir = base + self.rng.choice((1.0, -1.0)) * self.rng.uniform(2.0, 3.0)
             self.path = []
             self.path_goal = None
         if t < self.escape_until:
@@ -1081,6 +1376,10 @@ class Bot:
             pitch = math.atan2(best["pos"][2] + self.height * 0.5 - (z + muzzle),
                                max(bd, 1.0))
             return yaw, pitch
+        if self.crate_aim is not None:
+            cx, cy, cz = self.crate_aim
+            d = math.hypot(cx - x, cy - y)
+            return math.atan2(cy - y, cx - x), math.atan2(cz - (z + muzzle), max(d, 1.0))
         # no target: scan slowly so hunters are spotted before they close in
         age = obs["t"] - self.last_damage_t
         if age > 4.0 and not threats:
@@ -1122,6 +1421,17 @@ class Bot:
                     mp = (x + math.cos(self.aim[0]) * 3.0, y + math.sin(self.aim[0]) * 3.0,
                           z + muzzle)
                     if not self.arena.segment_blocked(mp, (lx, ly, lz), terrain=False):
+                        fire[0] = True
+            elif self.crate_aim is not None:
+                cx, cy, cz = self.crate_aim
+                dyaw = math.atan2(cy - y, cx - x)
+                dpitch = math.atan2(cz - (z + muzzle),
+                                    max(math.hypot(cx - x, cy - y), 1.0))
+                if (abs(ang_diff(self.aim[0], dyaw)) < 0.06
+                        and abs(self.aim[1] - dpitch) < 0.12):
+                    mp = (x + math.cos(self.aim[0]) * 3.0, y + math.sin(self.aim[0]) * 3.0,
+                          z + muzzle)
+                    if not self.arena.segment_blocked(mp, (cx, cy, cz), terrain=False):
                         fire[0] = True
         w1 = self.weapons[1]
         if w1 is not None and w1.get("kind") == "lightning" and w1.get("cooldown", 0) <= 0.02:

@@ -64,7 +64,7 @@ CFG = {
     "npc": {"count": 0},
     "drops": {"times": [70, 140, 210], "fall_s": 25, "radius": 8,
               "capture_s": 4, "cubes": 3, "repair": 1, "spread": 0.7},
-    "crates": {"count": 0},
+    "crates": {"count": 36, "hp": 300, "radius": 1.4, "height": 2.4, "cubes": 1},
     "debug": {},
     "upgrades": [],
     "match": {"duration_s": 480},
@@ -159,7 +159,7 @@ class Mech:
 
 class Match:
     def __init__(self, arena, seed, n_hunters=3, tiers=None, spawn=None,
-                 log=None, start_t=0.0):
+                 log=None, start_t=0.0, squad=False, staged=False):
         self.a = arena
         self.rng = random.Random(seed)
         self.t = 0.0
@@ -173,6 +173,9 @@ class Match:
         self.hunters = []
         self.player_damage = 0.0
         self.player_damage_by = {}
+        self.squad = squad
+        self.staged = staged
+        self.squad_mem = None
         if spawn is None:
             spawn = self._random_spawn()
         self.player = Mech(0, spawn)
@@ -184,6 +187,21 @@ class Match:
         self.time_alive = 0.0
         self.zone_damage = 0.0
         self.max_exposed = 0.0
+        self.crates = []
+        self.drops = []
+        self.next_drop = 0
+        self.drop_times = list(CFG["drops"]["times"])
+        self.next_drop_id = 6000
+        self.crate_id = 7000
+        self.cube_id = 9000
+        for _ in range(CFG["crates"]["count"]):
+            sp = self._random_spawn()
+            self.crates.append([sp[0], sp[1], sp[2], CFG["crates"]["hp"], self.crate_id])
+            self.crate_id += 1
+        for i in range(14):
+            sp = self._random_spawn()
+            self.cubes.append((sp[0], sp[1], self.cube_id + i, sp[2]))
+        self.cube_id += 14
 
     def _random_spawn(self):
         for _ in range(500):
@@ -198,6 +216,26 @@ class Match:
             if ok:
                 return [x, y, h]
         return [0.0, 0.0, self.a.height_fast(0, 0)]
+
+    def _spawn_drop(self):
+        z = self.zone
+        c = z.next_center
+        r = max(z.next_radius, 5.0)
+        x = y = 0.0
+        h = 0.0
+        for _ in range(300):
+            a = self.rng.uniform(0, TAU)
+            d = self.rng.uniform(0, r * 0.6)
+            x = c[0] + math.cos(a) * d
+            y = c[1] + math.sin(a) * d
+            ok, h = self.a.walkable(x, y, self.a.height_fast(x, y))
+            if ok:
+                break
+        did = self.next_drop_id
+        self.next_drop_id += 1
+        self.drops.append({"id": did, "pos": [x, y, h], "radius": 8.0,
+                           "lands_in": 25.0, "capture_s": 4.0,
+                           "progress": 0.0, "holder": None})
 
     def _spawn_hunters(self, n):
         for i in range(n):
@@ -405,7 +443,11 @@ class Match:
         tier = h.tier
         if p.alive and los:
             self.mem[h.id] = (self.t, p.pos[0], p.pos[1])
-        last = self.mem.get(h.id)
+            self.squad_mem = (self.t, p.pos[0], p.pos[1])
+        if self.squad and self.squad_mem is not None and self.t - self.squad_mem[0] <= 5.0:
+            last = self.squad_mem
+        else:
+            last = self.mem.get(h.id)
         tx, ty = (last[1], last[2]) if last else (px, py)
 
         # preferred range
@@ -472,6 +514,21 @@ class Match:
         else:
             h.charging = False
         self.step_mech(h, [mx, my], False, False, dt)
+
+    def sees_point(self, p, x, y, z, r=2.0):
+        a = self.a
+        d = math.hypot(x - p.pos[0], y - p.pos[1])
+        if d > CFG["vision"]["range"]:
+            return False
+        eye = (p.pos[0], p.pos[1], p.pos[2] + CFG["mech"]["eye_height"])
+        c = (x, y, z + r * 0.5)
+        t = (x, y, z + r)
+        if d <= CFG["vision"]["near_range"]:
+            return a.visible(eye, c, t)
+        b = math.atan2(y - p.pos[1], x - p.pos[0])
+        if abs(ang_diff(p.aim[0], b)) > math.radians(CFG["vision"]["fov_deg"]) * 0.5:
+            return False
+        return a.visible(eye, c, t) and not a.tree_blocked(eye, c)
 
     # --------------------------------------------------------------- player
     def make_obs(self, tick, event_list):
@@ -543,6 +600,20 @@ class Match:
         for c in self.cubes:
             if math.hypot(c[0] - p.pos[0], c[1] - p.pos[1]) < 20:
                 cubes.append({"id": c[2], "pos": [c[0], c[1], c[3]]})
+        crates = []
+        for cr in self.crates:
+            x, y, zc = cr[0], cr[1], cr[2]
+            if self.sees_point(p, x, y, zc, CFG["crates"]["height"]):
+                crates.append({"id": cr[4], "pos": [round(x, 2), round(y, 2), round(zc, 2)],
+                               "hp": round(cr[3], 1)})
+        drop_obs = []
+        for d in self.drops:
+            drop_obs.append({"id": d["id"], "pos": [round(v, 2) for v in d["pos"]],
+                             "radius": d["radius"],
+                             "lands_in": round(max(0.0, d["lands_in"]), 2),
+                             "capture_s": d["capture_s"],
+                             "progress": round(d["progress"], 2),
+                             "holder": d["holder"]})
         z = self.zone
         zp = p.pos[2]
         in_zone = math.hypot(p.pos[0] - z.center[0], p.pos[1] - z.center[1]) <= z.radius
@@ -560,8 +631,8 @@ class Match:
                              "stats": dict(CFG["weapons"]["gun"])}, None],
                 "in_zone": in_zone, "stats": dict(CFG["mech"]),
             },
-            "mechs": vis, "projectiles": projs, "crates": [], "cubes": cubes,
-            "pickups": [], "sounds": sounds, "beams": [],
+            "mechs": vis, "projectiles": projs, "crates": crates, "cubes": cubes,
+            "pickups": [], "sounds": sounds, "beams": [], "drops": drop_obs,
             "events": event_list,
             "zone": {"center": [round(z.center[0], 2), round(z.center[1], 2)],
                      "radius": round(z.radius, 1),
@@ -569,7 +640,7 @@ class Match:
                      "next_radius": round(z.next_radius, 1),
                      "shrink_start": round(z.shrink_start, 2),
                      "shrink_end": round(z.shrink_end, 2), "dps": z.dps},
-            "offer": None, "drops": [],
+            "offer": None,
         }
 
     # ----------------------------------------------------------------- run
@@ -577,13 +648,13 @@ class Match:
         dt = 0.1
         tick = 0
         self.sounds = []
-        # a handful of cubes so looting is exercisable
-        for i in range(14):
-            sp = self._random_spawn()
-            self.cubes.append((sp[0], sp[1], 5000 + i, sp[2]))
         bot_aim = [0.0, 0.0]
         while self.t < max_t and self.player.alive:
             self.zone.at(self.t)
+            if (self.next_drop < len(self.drop_times)
+                    and self.t >= self.drop_times[self.next_drop]):
+                self._spawn_drop()
+                self.next_drop += 1
             evs = self.events
             self.events = []
             obs = self.make_obs(tick, evs)
@@ -618,9 +689,12 @@ class Match:
                     if abs(ang_diff(b, yaw)) < 0.05 and d < bd:
                         bd = d
                         best = h
-                vx = math.cos(yaw) * CFG["weapons"]["gun"]["speed"]
-                vy = math.sin(yaw) * CFG["weapons"]["gun"]["speed"]
-                self.bullets.append({"owner": 0, "pos": list(muzzle), "vel": [vx, vy, 0.0],
+                sp = CFG["weapons"]["gun"]["speed"]
+                pitch = self.player.aim[1]
+                vx = math.cos(yaw) * sp * math.cos(pitch)
+                vy = math.sin(yaw) * sp * math.cos(pitch)
+                vz = math.sin(pitch) * sp
+                self.bullets.append({"owner": 0, "pos": list(muzzle), "vel": [vx, vy, vz],
                                      "life": 1.2, "aimed": best.id if best else None})
                 self.player.ammo -= 1
                 self.player.gun_cd = CFG["weapons"]["gun"]["cooldown"]
@@ -630,8 +704,11 @@ class Match:
                     self.player_damage += 0.0
 
             # hunters
-            for h in self.hunters:
-                if not h.alive:
+            active = len(self.hunters)
+            if self.staged:
+                active = min(len(self.hunters), 1 + int(self.t / 55.0))
+            for hi, h in enumerate(self.hunters):
+                if not h.alive or hi >= active:
                     continue
                 if h.charging:
                     self.sounds.append((h.id, "laser_charge", h.pos))
@@ -659,6 +736,7 @@ class Match:
             for b in list(self.bullets):
                 b["pos"][0] += b["vel"][0] * dt
                 b["pos"][1] += b["vel"][1] * dt
+                b["pos"][2] += b["vel"][2] * dt
                 b["life"] -= dt
                 hit = False
                 if b["owner"] != 0:
@@ -679,6 +757,18 @@ class Match:
                                                    h.pos[0] - self.player.pos[0]))
                             hit = True
                             break
+                    if not hit:
+                        for cr in list(self.crates):
+                            if (math.hypot(b["pos"][0] - cr[0], b["pos"][1] - cr[1]) < 1.5
+                                    and cr[2] - 0.5 <= b["pos"][2] <= cr[2] + 2.4):
+                                cr[3] -= CFG["weapons"]["gun"]["damage"]
+                                hit = True
+                                if cr[3] <= 0:
+                                    self.crates.remove(cr)
+                                    for _ in range(CFG["crates"]["cubes"]):
+                                        self.cubes.append((cr[0], cr[1], self.cube_id, cr[2]))
+                                        self.cube_id += 1
+                                break
                 if hit or b["life"] <= 0:
                     self.bullets.remove(b)
 
@@ -690,6 +780,30 @@ class Match:
                     self.player.cubes += 1
                     self.player.max_hp *= 1.04
                     self.player.hp = min(self.player.max_hp, self.player.hp + self.player.max_hp * 0.04)
+
+            # supply drops
+            for d in list(self.drops):
+                if d["lands_in"] > 0.0:
+                    d["lands_in"] -= dt
+                    continue
+                dp = d["pos"]
+                inside = math.hypot(dp[0] - self.player.pos[0],
+                                    dp[1] - self.player.pos[1]) <= d["radius"]
+                others = any(h.alive and math.hypot(dp[0] - h.pos[0],
+                                                    dp[1] - h.pos[1]) <= d["radius"]
+                             for h in self.hunters)
+                if inside and not others:
+                    d["progress"] += dt
+                    d["holder"] = 0
+                    if d["progress"] >= d["capture_s"]:
+                        self.player.cubes += CFG["drops"]["cubes"]
+                        self.player.max_hp *= 1.0 + 0.04 * CFG["drops"]["cubes"]
+                        self.player.hp = self.player.max_hp
+                        self.player.energy = 100.0
+                        self.drops.remove(d)
+                else:
+                    d["progress"] = 0.0
+                    d["holder"] = None
 
             self.t += dt
             tick += 2
@@ -715,8 +829,11 @@ def main():
         tiers = sys.argv[sys.argv.index("-t") + 1].split(",")
     tot = 0.0
     times = []
+    squad = "--squad" in sys.argv
+    staged = "--staged" in sys.argv
     for s in seeds:
-        m = Match(a, seed=1000 + s, n_hunters=len(tiers) if tiers else 3, tiers=tiers)
+        m = Match(a, seed=1000 + s, n_hunters=len(tiers) if tiers else 3, tiers=tiers,
+                  squad=squad, staged=staged)
         bot = ghost.Bot({"config": CFG, "seed": s, "slot": 0,
                          "map": {"dir": "mechfight-kit/arena"}, "_arena": a})
         if verbose == s:

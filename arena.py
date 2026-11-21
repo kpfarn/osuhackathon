@@ -357,7 +357,7 @@ class Arena:
         t = 0.0
         solid = self.solid
         canopy = self.canopy if trees else None
-        gh = self.gmaxh
+        gh = self.gh
         gnx = self.gnx
         gny = self.gny
         while True:
