@@ -61,7 +61,32 @@ func (b *Bot) think(act *proto.Action) {
 		}
 		s := 1 / (1 + th.d/60)
 		if th.tr.LOS {
-			s *= 1.5
+			s *= 3
+		}
+		if th.engaged {
+			s *= 1.6
+		}
+		if th.tr.MaxHP > 0 {
+			s *= 1 + (1 - th.tr.HP/th.tr.MaxHP)
+		}
+		if th.tr.ID == b.targetID {
+			s *= 1.2
+		}
+		if b.P.RearBonus > 0 && b.isRear(th.tr) {
+			s *= 1 + b.P.RearBonus
+		}
+		if b.P.CookoffBonus > 0 && b.has("laser") >= 0 && th.tr.Mortar && stat(b.C.Weapons["laser"], "cookoff", 0) > 0 {
+			s *= 1 + b.P.CookoffBonus
+		}
+		if b.P.ThreatFocus {
+			if th.tr.Light && th.d < stat(b.C.Weapons["lightning"], "range", 45)+35 {
+				s *= 1.25
+			} else if th.tr.Laser {
+				s *= 1.18
+			}
+			if th.tr.MaxHP > 0 && th.tr.HP > 0 && th.tr.HP/th.tr.MaxHP < 0.35 {
+				s *= 1.25
+			}
 		}
 		if s > bestS {
 			bestS, tgt = s, th
@@ -353,13 +378,21 @@ func (b *Bot) think(act *proto.Action) {
 				if prev != nil {
 					c = prev(x, y)
 				}
-				_, _, _, _, _ = aimCos, aimSin, beamW, beamHalf, lasRange
-				if b.W.Visible(ex, ey, ez, x, y, b.pos[2]+b.height*0.5) {
-					c += dmg * 0.25
+				if b.W.Visible(ex, ey, ez, x, y, b.pos[2]+b.height*0.5) || b.W.Visible(ex, ey, ez, x, y, b.pos[2]+b.height*0.9) {
+					c += dmg
+					if b.P.LaserDodgeV2 && beamW > 0 {
+						// perpendicular distance to the charging enemy's aim ray: forces boosted sidestep even in open terrain
+						bx, by := ex+aimCos*lasRange, ey+aimSin*lasRange
+						perp, _ := segPointDist2D(x, y, ex, ey, bx, by)
+						if perp < beamHalf*2.5 {
+							c += beamW * (1 - perp/(beamHalf*2.5))
+						}
+					}
 				}
 				return c
 			}
-			rq.lookTicks = 6
+			rq.lookTicks = 12
+			rq.dodgeBoost = true
 		}
 	}
 	// Apex-Go v2: SquadLaserCover — even in squad stance, duck behind very close cover while an enemy laser charges at us
@@ -375,7 +408,51 @@ func (b *Bot) think(act *proto.Action) {
 			}
 		}
 	}
-	// defer secondary positioning penalties to the core range/strafe planner
+	// Apex-Go v2: Anti-Lightning forcefield (all carriers, primary OR secondary)
+	if b.P.AntiLightningW > 0 {
+		haveLight := b.has("lightning") >= 0 && b.energy > 18
+		if !haveLight || hpFrac < 0.55 {
+			lightBase := stat(b.C.Weapons["lightning"], "range", 45)
+			pad := b.P.AntiLightningPad
+			if pad <= 0 {
+				pad = 10
+			}
+			for i := range ths {
+				tr := ths[i].tr
+				if !tr.Light || (!tr.Listed && b.t-tr.LastSeen > 2.5) {
+					continue
+				}
+				safeR := lightBase + pad
+				if tr.Cubes >= 6 {
+					safeR += 6 // margin for lightning_range upgrade
+				}
+				if ths[i].d > safeR+22 {
+					continue
+				}
+				lx, ly := tr.Pos[0], tr.Pos[1]
+				w := b.P.AntiLightningW
+				prev := rq.posCost
+				rq.posCost = func(x, y float64) float64 {
+					c := 0.0
+					if prev != nil {
+						c = prev(x, y)
+					}
+					d := hyp(x-lx, y-ly)
+					if d < safeR {
+						f := (safeR - d) / safeR
+						c += w * f * (1 + (safeR-d)/20)
+					}
+					return c
+				}
+				if ths[i].d < safeR+4 && tr.LOS {
+					rq.dodgeBoost = true
+					if rq.lookTicks < 10 {
+						rq.lookTicks = 10
+					}
+				}
+			}
+		}
+	}
 	heading, haveHeading := 0.0, false
 	var shootItem *aimTarget
 	shootHP := 0.0
@@ -556,7 +633,6 @@ func (b *Bot) think(act *proto.Action) {
 
 	case b.retreating:
 		b.mode = "retreat"
-		// prioritize disengagement pathing during retreat
 		// a leg deeper into cover, once begun, is walked to its end unless it stops being cover
 		deeper := (b.P.RunOnRange > 0 || b.P.CoverMargin > 0) && st.avoid // (free-for-all stances only)
 		deep := deeper && b.deepCell >= 0 && b.t-b.deepT < 8
@@ -624,15 +700,7 @@ func (b *Bot) think(act *proto.Action) {
 
 	case wantFight:
 		b.mode = "fight" + fightWhy
-		if dr := b.dropRun(st, hpFrac); dr != nil && !onRoof {
-			// practice stance supply drop break-off (full HP + full energy + 3 cubes)
-			b.mode = "fight+drop"
-			d := setGoal(dr.Pos[0], dr.Pos[1], 2.4, b.energy > 40 && dr.LandsIn < 6)
-			if d < 3 {
-				rq.wantW = 0
-				rq.hold = true
-			}
-		} else if w := b.weaponRun(32); w != nil && !onRoof {
+		if w := b.weaponRun(32); w != nil && !onRoof {
 			// a better weapon lying right here beats another second of shooting
 			b.mode = "fight+arm"
 			dx, dy, _, _ := b.navDir(w.Pos[0], w.Pos[1])
@@ -816,20 +884,15 @@ func (b *Bot) think(act *proto.Action) {
 				rq.hold = true
 			} else if zi.final {
 				// last circle: stand on the centre (FinalHold shrinks tolerance as radius collapses to 0)
-				tol := 3.5
+				tol := 2.0
 				boostFinal := false
+				if b.P.FinalHold {
+					tol = clamp(b.o.Zone.Radius*0.06, 0.35, 2.0)
+					boostFinal = b.o.Zone.Radius < 18 && b.energy > 15
+				}
 				if d := setGoal(b.o.Zone.NextCenter[0], b.o.Zone.NextCenter[1], 1.8, boostFinal); d < tol {
 					rq.wantW = 0
 					rq.hold = true
-				}
-			} else if sx, sy, sid, ok := b.seekTarget(st, hpFrac); ok && !roofFirst {
-				b.mode = "seek"
-				setGoal(sx, sy, 1.8, false)
-				if !goalOK && sid >= 0 {
-					if b.seekBan == nil {
-						b.seekBan = map[int]float64{}
-					}
-					b.seekBan[sid] = b.t + 30
 				}
 			} else if rx, ry, ok := b.roamTarget(st, hpFrac); ok && !roofFirst && (!roofWanted || (!b.armed() && quiet)) {
 				// nothing known to pick up: go and look for crates and weapons
@@ -961,7 +1024,6 @@ func (b *Bot) think(act *proto.Action) {
 			}
 		}
 	}
-	// leave gun reloads to empty-mag or idle sweeps
 	b.modeLabel = st.name + ":" + b.mode
 	// The debug label doubles as telemetry (it is recorded per decision in a file only our team can
 	// get): stance:mode, health, mechs alive, attackers on us, our kills, cubes, weapons, target range.
@@ -1266,84 +1328,10 @@ func (b *Bot) fightMove(rq *steerReq, th *threat) {
 	if haveLight && th.d > rmax+10 && b.energy > 55 {
 		rq.boost = true
 	}
-	// conserve energy during close-range strafing
-}
-
-// dropRun (DropRun > 0, practice squad stance): break off for a supply drop in reach for full HP + 3 cubes.
-func (b *Bot) dropRun(st stance, hpFrac float64) *proto.DropObs {
-	if b.P.DropRun <= 0 || st.name != "squad" {
-		return nil
-	}
-	if hpFrac > 0.85 && b.o.Self.Cubes >= 10 {
-		return nil
-	}
-	var best *proto.DropObs
-	bd := 1e18
-	for i := range b.o.Drops {
-		dr := &b.o.Drops[i]
-		if until, banned := b.banUntil[dr.ID]; banned && b.t < until {
-			continue
-		}
-		d := dist2(b.pos, dr.Pos)
-		if d > b.P.DropRun {
-			continue
-		}
-		if dr.LandsIn > d/b.walk*1.25+4 {
-			continue
-		}
-		if !b.inFutureZone(dr.Pos[0], dr.Pos[1], d/b.walk+6, 4) {
-			continue
-		}
-		if d < bd {
-			best, bd = dr, d
+	if b.P.LightKiteBoost && !haveLight && tr.Light && b.energy > 28 {
+		lr := stat(b.C.Weapons["lightning"], "range", 45)
+		if th.d < lr+12 {
+			rq.boost = true
 		}
 	}
-	return best
-}
-
-// seekTarget (Seek > 0, practice squad stance): actively pursue the nearest favourable mech when healthy.
-func (b *Bot) seekTarget(st stance, hpFrac float64) (x, y float64, id int, ok bool) {
-	seekHP := b.P.SeekHP
-	if seekHP <= 0 {
-		seekHP = 0.65
-	}
-	seekR := b.P.SeekRange
-	if seekR <= 0 {
-		seekR = 320
-	}
-	if b.P.Seek <= 0 || st.name != "squad" || !st.hunt || hpFrac < seekHP {
-		return 0, 0, -1, false
-	}
-	if b.seekBan == nil {
-		b.seekBan = map[int]float64{}
-	}
-	var best *Track
-	bd := 1e18
-	for _, tr := range b.tracks {
-		if tr.NPC || b.t-tr.LastSeen > b.P.Seek {
-			continue
-		}
-		if until, ok := b.seekBan[tr.ID]; ok && b.t < until {
-			continue
-		}
-		d := dist2(b.pos, tr.Pos)
-		if d > seekR || !b.inFutureZone(tr.Pos[0], tr.Pos[1], 8, 6) {
-			continue
-		}
-		if d < 22 && !tr.Listed {
-			b.seekBan[tr.ID] = b.t + 20
-			continue
-		}
-		if adv, _, _ := b.fightPlan(tr, d); adv < st.engageRatio {
-			continue
-		}
-		if d < bd || (d == bd && best != nil && tr.ID < best.ID) {
-			best, bd = tr, d
-		}
-	}
-	if best != nil {
-		return best.Pos[0], best.Pos[1], best.ID, true
-	}
-	x, y, ok = b.roamGoal()
-	return x, y, -1, ok
 }

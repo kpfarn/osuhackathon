@@ -106,17 +106,24 @@ func (b *Bot) peekStep(ths []threat, li int, hpFrac float64) (cell int, charge b
 	full := stat(sl.stats, "charge", 0.75)
 	fx, fy := b.Nav.Pos(b.peek.fire)
 	kx, ky := b.Nav.Pos(b.peek.duck)
-	travel := hyp(fx-kx, fy-ky)/b.walk + 0.05
-	_ = travel
-	_ = ths
+	// time to walk out while charging (charging halves our speed)
+	travel := hyp(fx-kx, fy-ky)/(b.walk*0.5) + 0.15
 	atDuck := hyp(b.pos[0]-kx, b.pos[1]-ky) < 4
 	atFire := hyp(b.pos[0]-fx, b.pos[1]-fy) < 4
+	// a laser charging at us: nothing is worth standing in front of it
+	threatened := false
+	for i := range ths {
+		tr := ths[i].tr
+		if tr.Laser && tr.Charging && tr.LOS && b.t-tr.AimAtMeT < 0.3 {
+			threatened = true
+		}
+	}
 	cell = b.peek.duck
 	switch {
-	case hpFrac < 0.12:
-		// low health hold
-	case sl.charge > 0 && sl.charge >= full*0.2:
-		cell = b.peek.fire // commit to firing lane early during charge
+	case hpFrac < 0.2 || threatened:
+		// stay hidden (a charge already begun keeps for two seconds)
+	case sl.charge > 0 && sl.charge >= full-travel:
+		cell = b.peek.fire // step out so that we arrive as the charge completes
 	case sl.charge <= 0 && sl.cooldown <= 0.1 && (atDuck || atFire):
 		charge = true // begin charging where we cannot be seen
 	}

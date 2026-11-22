@@ -101,10 +101,11 @@ func (b *Bot) leadPersistAt(tr *Track, t float64) float64 {
 		n++
 	}
 	if n < 8 || last == nil || last.t-first.t < 0.7 {
-		return 0.45
+		return 1
 	}
-	_ = sp
-	return 0.45
+	mean := hyp(last.x-first.x, last.y-first.y) / (last.t - first.t)
+	pers := mean / math.Max(sp/float64(n), 0.5)
+	return clamp((pers-0.2)/0.5, 0, 1)
 }
 
 // gunLead returns the multiplier to apply to the velocity lead when shooting the gun at this mech.
@@ -112,5 +113,14 @@ func (b *Bot) gunLead(tr *Track) float64 {
 	if tr.NPC {
 		return 1
 	}
-	return 0.45
+	if b.P.LeadCum && tr.leadN >= b.P.LeadCumMin {
+		margin := 0.2 * tr.leadN
+		if tr.missNone < tr.missLead-margin {
+			return 0 // it jitters: shoot where it stands
+		}
+		if tr.missLead < tr.missNone-margin {
+			return 1 // it walks: lead it fully whatever its last second looked like
+		}
+	}
+	return b.leadPersistAt(tr, b.t)
 }

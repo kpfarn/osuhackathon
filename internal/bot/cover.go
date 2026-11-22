@@ -101,8 +101,26 @@ func (b *Bot) deeperCover(ths []threat, maxCost float64, farther bool) int {
 		}
 		return true
 	}
+	// hidden with room to spare: also from where the threat would be after a step to either side
 	robust := func(x, y, gz float64) bool {
-		return hidden(x, y, gz)
+		for _, e := range eyes {
+			if seen(e.x, e.y, e.z, x, y, gz) {
+				return false
+			}
+			if margin <= 0 {
+				continue
+			}
+			dx, dy := x-e.x, y-e.y
+			l := hyp(dx, dy)
+			if l < 1 {
+				return false
+			}
+			px, py := -dy/l*margin, dx/l*margin
+			if seen(e.x+px, e.y+py, e.z, x, y, gz) || seen(e.x-px, e.y-py, e.z, x, y, gz) {
+				return false
+			}
+		}
+		return true
 	}
 	if !needFar && robust(b.pos[0], b.pos[1], b.pos[2]) {
 		return -1
@@ -136,11 +154,22 @@ func (b *Bot) deeperCover(ths []threat, maxCost float64, farther bool) int {
 			}
 		}
 		checked++
-		if checked > 75 {
+		if checked > 300 {
 			return false
 		}
 		if !robust(x, y, float64(b.Nav.Z[k])) {
 			return true
+		}
+		// the straight way there: walkable points a quarter, half and three quarters along must be hidden too
+		for _, f := range [3]float64{0.25, 0.5, 0.75} {
+			mx, my := b.pos[0]+(x-b.pos[0])*f, b.pos[1]+(y-b.pos[1])*f
+			mk := b.Nav.Index(mx, my)
+			if b.Nav.Solid[mk] {
+				continue // the walk goes round this
+			}
+			if !hidden(mx, my, float64(b.Nav.Z[mk])) {
+				return true
+			}
 		}
 		found = k
 		return false

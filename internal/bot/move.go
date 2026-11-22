@@ -37,9 +37,9 @@ func (b *Bot) gatherIncoming() []incoming {
 			x, y, z := p.Pos[0], p.Pos[1], p.Pos[2]
 			vx, vy, vz := p.Vel[0], p.Vel[1], p.Vel[2]
 			tt := 0.0
-			const h = 0.20
+			const h = 0.05
 			hit := false
-			for tt < 2.4 {
+			for tt < 7 {
 				nx, ny, nz := x+vx*h, y+vy*h, z+vz*h-0.5*g*h*h
 				if !b.W.Visible(x, y, z, nx, ny, nz) {
 					hit = true
@@ -67,12 +67,12 @@ func (b *Bot) gatherIncoming() []incoming {
 			continue
 		}
 		d := hyp(rx, ry)
-		if d > 95 {
+		if d > 330 {
 			continue
 		}
 		// lateral miss distance if nobody moves
 		lat := math.Abs(rx*p.Vel[1]-ry*p.Vel[0]) / math.Max(hyp(p.Vel[0], p.Vel[1]), 1)
-		if lat > 4.5+b.radius {
+		if lat > 14+b.radius {
 			continue
 		}
 		reach := b.W.Raycast(p.Pos[0], p.Pos[1], p.Pos[2], p.Vel[0]/sp, p.Vel[1]/sp, p.Vel[2]/sp, d+20)
@@ -135,8 +135,8 @@ func (b *Bot) steer(act *proto.Action, rq steerReq) {
 			horizon = k
 		}
 	}
-	if horizon > 14 {
-		horizon = 14
+	if horizon > 44 {
+		horizon = 44
 	}
 	progTick := 6
 	if rq.lookTicks > progTick {
@@ -148,13 +148,13 @@ func (b *Bot) steer(act *proto.Action, rq steerReq) {
 
 	cands := b.scratch[:0]
 	cands = append(cands, cand{0, 0, false, 0})
-	for i := 0; i < 16; i += 2 {
+	for i := 0; i < 16; i++ {
 		cands = append(cands, cand{dirs16[i][0], dirs16[i][1], false, 0})
 	}
 	if rq.wantX != 0 || rq.wantY != 0 {
 		cands = append(cands, cand{rq.wantX, rq.wantY, false, 0})
 	}
-	if canBoost && rq.boost {
+	if canBoost && (rq.boost || rq.dodgeBoost || len(rq.threats) > 0) {
 		n := len(cands)
 		for i := 1; i < n; i++ {
 			cands = append(cands, cand{cands[i].dx, cands[i].dy, true, 0})
@@ -238,7 +238,7 @@ func (b *Bot) steer(act *proto.Action, rq steerReq) {
 				if d < b.radius+0.3+0.55 {
 					tz := th.pos[2] + th.vel[2]*(t0+(te-t0)*s)
 					if tz > b.pos[2]-0.6 && tz < b.pos[2]+b.height+0.6 {
-						score -= th.dmg * 0.3
+						score -= th.dmg
 					}
 				}
 			}

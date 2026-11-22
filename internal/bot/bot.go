@@ -156,38 +156,21 @@ type Params struct {
 	RegenHoldHP      float64 // when no enemy is engaged and hpFrac < RegenHoldHP, briefly hold cover to trigger regen (0 = off)
 	ThreatFocus      bool    // focus-fire bonus for laser/lightning carriers and low-HP enemies (<35%)
 	LightKiteBoost   bool    // boost-kite away when an enemy lightning carrier closes inside range+12
-
-	// Apex-Go v3 upgrades (from 402-repo GitHub re-probe, all config-driven & independently ablatable)
-	CoverReload      bool    // MarwanMoh11 v5.15: top off gun mag (ammo<=0.6*mag) behind cover when no enemy LOS >= 1.1s
-	UpV2             bool    // lukejwaszyn f58c537: exact sustained-DPS upgrade order (gun_mag +31% above gun_rate +8%)
-	CubeSmart        bool    // lukejwaszyn a37a738: price cube piles by cluster size & 1.75x bonus when crossing upgrade threshold
-	LaserMechOnly    bool    // andrew-zhouu v0.134: never start a laser charge on crates/NPCs (keep ready for mechs)
-	RearAvoidW       float64 // SandeepMadhavarapu 4f3c7d9: penalize steer positions putting extra attackers in our 1.5x rear arc
-	LaserCDTrack     bool    // MarwanMoh11 v5.11: track obs.Beams laser shots per enemy -> punish during 2s cooldown window
-	KillFocus        float64 // andrew-zhouu v0.134: weight of enemy missing HP in target scoring (0 = default 1.0)
-	Seek             float64 // andrew-zhouu v0.134: in squad stance, seek last-known enemy seen within Seek seconds (0 = off)
-	SeekRange        float64 // max range for Seek (default 320)
-	SeekHP           float64 // min hpFrac for Seek (default 0.65)
-	DropRun          float64 // andrew-zhouu v0.134: in squad stance, break off for supply drop within DropRun m (0 = off)
-	EdgeBias         float64 // andrew-zhouu v0.119: in FFA stance, prefer outer rim of next circle (0 = off)
-	EdgeBand         float64 // in FFA stance, penalize hiding closer than EdgeBand*NextRadius to center (0 = off)
-	PracticeRim      float64 // practice rim-riding: prefer outer 85-90% of next circle while NextRadius >= 180 (0 = off)
-	RetreatPest      bool    // shoot plinking NPC drone while retreating if no enemy mech is engaged
 }
 
 func DefaultParams() Params {
 	return Params{
 		Name:          "apex-go",
-		EngageRatio:   0.70,
-		DisengageRat:  0.30,
-		RetreatHP:     0.20,
-		ReturnHP:      0.65,
-		LeadDamp:      0.95,
-		GunMaxRange:   230,
-		StrafeMin:     0.12,
-		StrafeMax:     0.28,
-		LootRadius:    250,
-		WantCubes:     26,
+		EngageRatio:   1.25,
+		DisengageRat:  0.75,
+		RetreatHP:     0.45,
+		ReturnHP:      0.85,
+		LeadDamp:      0.65,
+		GunMaxRange:   224,
+		StrafeMin:     0.35,
+		StrafeMax:     1.1,
+		LootRadius:    220,
+		WantCubes:     15,
 		DropGreed:     0.5,
 		Hunt:          true,
 		PracticeAware: true,
@@ -205,7 +188,7 @@ func DefaultParams() Params {
 		RoofMinHeight:  12,
 		RoofMinZone:    60,
 		ArmRadius:      110,
-		OpenSecs:       6,
+		OpenSecs:       24,
 		CreditOpenS:    25,
 		DropRadius:     300,
 		LeaveTTD:       10,
@@ -224,7 +207,7 @@ func DefaultParams() Params {
 		PlanV2:            true,
 		KiteNeedsLaser:    true,
 		Brawl:             true,
-		AvoidAdv:          0.65,
+		AvoidAdv:          1.25,
 		BrawlEngage:       1.3,
 		BrawlDisengage:    0.75,
 		BrawlHunt:         true,
@@ -233,8 +216,8 @@ func DefaultParams() Params {
 		AvoidRange:        85,
 		AvoidCover:        55,
 		ZoneSlack:         10,
-		CoverFirst:        false,
-		NoMortar:          false,
+		CoverFirst:        true,
+		NoMortar:          true, // a laser hit on a mortar carrier does 60% more (seen: 1,024 health gone in 0.7 s)
 		EdgeHold:          2.5,
 		RunOnRange:        80,
 		RunOnGain:         18,
@@ -283,7 +266,7 @@ func DefaultParams() Params {
 		KiteMax:        190,
 		PatientCubes:   10,
 		PatientRange:   70,
-		// Apex-Go v2 verified winners (#1 6.28 official; 4.70 192m grand; 8.35 FFA)
+		// Apex-Go v2 verified winners (4.70 192-match grand avg vs #4 4.33; 8.35 vs 6.88 in 16-mech FFA)
 		AntiLightningW:   180,
 		AntiLightningPad: 12,
 		SmartFireV2:      true,
@@ -293,12 +276,6 @@ func DefaultParams() Params {
 		CautiousT:        265,
 		BeamFFA:          true,
 		FinalHold:        true,
-		// Apex-Go v3 verified winners (4.99 192m grand, 6.00 TR_HK1, 9,070 dealt, 3.87x trade, 8 alive wins)
-		LaserCDTrack: true,
-		RearAvoidW:   35,
-		CoverReload:  true,
-		RetreatPest:  true,
-		PracticeRim:  0.6,
 	}
 }
 
@@ -330,7 +307,6 @@ type Track struct {
 	WasListed bool   // listed in the previous observation
 	ViewT    float64 // last time it was inside our own field of view (not just remembered)
 	EngT     float64 // last time it counted as engaged with us
-	LaserFiredT float64 // last time we saw this mech fire a laser beam (for cooldown punish window)
 
 	// recent motion, for choosing how to lead it (see lead.go)
 	hist            [trkHist]trkSample
@@ -430,7 +406,6 @@ type Bot struct {
 
 	lastDamageT  float64 // last time we took damage from anything
 	lastWeaponDT float64 // last time a weapon (not zone) hurt us
-	lastEnemyLOST float64 // last time any enemy mech had LOS to us (for cover-pause top-off reload)
 	lastDealtT   float64
 	recentDmg    float64 // decayed damage taken
 	lastDmgBear  float64
@@ -517,7 +492,6 @@ type Bot struct {
 	surfWatchPos [3]float64
 	surfPushing bool
 	banUntil    map[int]float64 // loot ids / roam cells we could not reach
-	seekBan     map[int]float64 // mech ids we sought and didn't find there
 	roof        roofPlan
 	roofCoverC  int
 	roofCoverT  float64
@@ -585,7 +559,6 @@ func New(h *proto.Hello, w *world.World, nav *world.Nav, p Params) *Bot {
 	b.evadeCell = -1
 	b.lastDamageT = -100
 	b.lastWeaponDT = -100
-	b.lastEnemyLOST = -100
 	b.lastDealtT = -100
 	b.lastSoundT = -100
 	b.ffaSeenT = -100
@@ -894,9 +867,6 @@ func (b *Bot) observe(o *proto.Obs) {
 			b.W.Visible(eye[0], eye[1], eye[2], m.Pos[0], m.Pos[1], m.Pos[2]+ch*1.9)
 		if tr.LOS {
 			tr.LOST = b.t
-			if !tr.NPC {
-				b.lastEnemyLOST = b.t
-			}
 			// would the server say we see it right now (as opposed to remembering it)?
 			d3 := dist3(eye, [3]float64{m.Pos[0], m.Pos[1], m.Pos[2] + ch})
 			if d3 < nearRange-1 || (d3 < visRange-2 && math.Abs(angDiff(math.Atan2(m.Pos[1]-b.pos[1], m.Pos[0]-b.pos[0]), b.aim[0])) < fovHalf-0.05) {
@@ -1062,11 +1032,6 @@ func (b *Bot) observe(o *proto.Obs) {
 		bm := &o.Beams[i]
 		if bm.By == s.ID {
 			continue
-		}
-		if b.P.LaserCDTrack && bm.Kind == "laser" {
-			if tr := b.tracks[bm.By]; tr != nil {
-				tr.LaserFiredT = b.t - bm.Age
-			}
 		}
 		if len(bm.Path) >= 2 {
 			p0 := bm.Path[0]

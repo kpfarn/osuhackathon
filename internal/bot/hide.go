@@ -80,7 +80,9 @@ func (b *Bot) belief() stance {
 	if b.P.ForceFFA {
 		b.ffa = true
 	}
-	// rely on death accounting for lobby classification
+	if b.P.BeamFFA && b.ffaBeams >= 2 {
+		b.ffa = true
+	}
 	// The seat tells: in every public lobby with house bots (60 recorded) the players sit in the lowest
 	// seats and the house bots fill the rest, so in practice (us and 15 house bots) we are in seat 0;
 	// where all 16 are team bots the seats are shuffled. Any other seat is a free-for-all from the
@@ -103,7 +105,8 @@ func (b *Bot) belief() stance {
 		}
 		// not known yet: careful, but not shy about loot close by
 		return stance{name: "open", engageRatio: 1.5, disengage: 0.9, hunt: false, stealth: true, lootRadius: 110, wantCubes: b.P.WantCubes}
-	// keep active stance through late circles
+	case b.P.CautiousT > 0 && b.P.PracticeAware && (b.t >= b.P.CautiousT || (b.o.Zone.NextRadius > 0 && b.o.Zone.NextRadius <= 72 && b.t >= 180)):
+		return b.brawlStance("late")
 	}
 	return stance{name: "squad", engageRatio: b.P.EngageRatio, disengage: b.P.DisengageRat, hunt: b.P.Hunt, lootRadius: b.P.LootRadius, wantCubes: b.P.WantCubes}
 }
@@ -150,8 +153,10 @@ func (b *Bot) chooseHide(zi zoneInfo) int {
 			}
 			// walking is when we get seen: a far better spot has to be clearly better
 			s := float64(e)*100 + d*b.hideDistW()
-			// favour central zone positioning for shorter future rotations
-			s += dn * 0.12
+			// the middle of the circle is where everyone ends up walking through
+			if z.NextRadius > 60 && dn < z.NextRadius*0.35 {
+				s += 10
+			}
 			// prefer being close to a wall (something to duck behind)
 			s += float64(b.Nav.Clear[k]) * 0.8
 			if k == b.holdCell {
@@ -164,7 +169,40 @@ func (b *Bot) chooseHide(zi zoneInfo) int {
 		return -1
 	}
 	sort.Slice(cands, func(a, c int) bool { return cands[a].score < cands[c].score })
-	return cands[0].cell
+	if len(cands) > 60 {
+		cands = cands[:60]
+	}
+	// refine the shortlist with what we know about enemies and hot spots
+	best, bs := -1, 1e18
+	for _, c := range cands {
+		x, y := b.Nav.Pos(c.cell)
+		gz := float64(b.Nav.Z[c.cell])
+		s := c.score
+		for _, tr := range b.tracks {
+			if tr.NPC || b.t-tr.LastSeen > 25 {
+				continue
+			}
+			d := hyp(tr.Pos[0]-x, tr.Pos[1]-y)
+			if d < 90 {
+				s += (90 - d) * 0.35
+			}
+			if d < 260 && b.t-tr.LastSeen < 8 {
+				sc := tr.scale(b.sizePerCube)
+				if b.W.Visible(tr.Pos[0], tr.Pos[1], tr.Pos[2]+8*sc, x, y, gz+b.height*0.6) {
+					s += 30
+				}
+			}
+		}
+		for i := range b.o.Drops {
+			if hyp(b.o.Drops[i].Pos[0]-x, b.o.Drops[i].Pos[1]-y) < 70 {
+				s += 15
+			}
+		}
+		if s < bs {
+			best, bs = c.cell, s
+		}
+	}
+	return best
 }
 
 func (b *Bot) hideDistW() float64 {

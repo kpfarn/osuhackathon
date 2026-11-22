@@ -11,7 +11,7 @@ func (b *Bot) fightPlan(tr *Track, d float64) (adv, rmin, rmax float64) {
 		hp = math.Max(tr.MaxHP, 1)
 	}
 	type band struct{ r float64 }
-	cands := [...]float64{24, 38}
+	cands := [...]float64{22, 45, 75, 115, 160, 200}
 	bestAdv, bestR := -1.0, d
 	eval := func(r float64, here bool) {
 		mine := b.myDPS(r)
@@ -61,8 +61,8 @@ func (b *Bot) fightPlan(tr *Track, d float64) (adv, rmin, rmax float64) {
 	if bestAdv < 0 {
 		return 0, 30, 55
 	}
-	_ = bestR
-	return bestAdv, 18, 42
+	w := 10 + bestR*0.15
+	return bestAdv, math.Max(8, bestR-w), bestR + w
 }
 
 // dodgeFactor scales an enemy's expected damage on us at a range: far-off gunfire mostly misses a
@@ -171,8 +171,6 @@ func (b *Bot) roamGoal() (float64, float64, bool) {
 			}
 			d := hyp(x-b.pos[0], y-b.pos[1])
 			s := d - math.Min(age, 300)*0.15
-			dn := hyp(x-z.NextCenter[0], y-z.NextCenter[1])
-			s += dn * 0.15
 			if s < bs {
 				best, bs = k, s
 			}

@@ -90,15 +90,17 @@ func (b *Bot) solveDirectLat(tg aimTarget, speed, originH, lat float64) shot {
 	if tg.leadSet {
 		k = tg.lead
 	}
-	for it := 0; it < 1; it++ {
+	for it := 0; it < 4; it++ {
 		damp := b.leadDamp(tf)
 		px = tg.pos[0] + tg.vel[0]*(lat+tf*damp)*k
 		py = tg.pos[1] + tg.vel[1]*(lat+tf*damp)*k
-		pz = tg.pos[2] + tg.centerZ
-		if speed > 0 {
-			d := math.Sqrt((px-ox)*(px-ox) + (py-oy)*(py-oy) + (pz-oz)*(pz-oz))
-			tf = math.Max(0, d-3) / speed
+		vz := clamp(tg.vel[2], -15, 12)
+		pz = tg.pos[2] + tg.centerZ + vz*(lat+tf)*0.6
+		if speed <= 0 {
+			break
 		}
+		d := math.Sqrt((px-ox)*(px-ox) + (py-oy)*(py-oy) + (pz-oz)*(pz-oz))
+		tf = math.Max(0, d-3) / speed
 	}
 	hd := hyp(px-ox, py-oy)
 	s := shot{ok: true, tf: tf, point: [3]float64{px, py, pz}}
@@ -239,17 +241,41 @@ func (b *Bot) engage(act *proto.Action, tg aimTarget, hasLOS, losRecent bool, hp
 		headOK = true
 	}
 	pitchTol := tg.centerZ * 0.8
-	_ = headTg
-	_ = headOK
 	if gunI >= 0 {
-		gunTg := tg
+		gunTg, gunHead := tg, headTg
 		if tg.gunLeadSet {
+			// the lead learned for this opponent applies to the bullet only
 			gunTg.lead, gunTg.leadSet = tg.gunLead, true
+			gunHead.lead, gunHead.leadSet = tg.gunLead, true
 		}
-		gunS = b.solveDirectLat(gunTg, stat(b.slots[gunI].stats, "speed", 252), b.muzzleH, fireLatency)
+		gunLat := fireLatency
+		if b.P.SmartFireV2 {
+			if b.slots[gunI].cooldown <= b.dt+1e-6 {
+				gunLat = b.dt
+			} else {
+				gunLat = b.decide
+			}
+		}
+		gunS = b.solveDirectLat(gunTg, stat(b.slots[gunI].stats, "speed", 252), b.muzzleH, gunLat)
+		if !gunS.clear && headOK {
+			if alt := b.solveDirectLat(gunHead, stat(b.slots[gunI].stats, "speed", 252), b.muzzleH, gunLat); alt.clear {
+				gunS = alt
+				pitchTol = 0.7
+			}
+		}
 	}
 	if lasI >= 0 || ligI >= 0 {
-		lasS = b.solveDirectLat(tg, 0, b.muzzleH, fireLatency)
+		lasLat := fireLatency
+		if b.P.SmartFireV2 {
+			lasLat = b.dt
+		}
+		lasS = b.solveDirectLat(tg, 0, b.muzzleH, lasLat)
+		if !lasS.clear && headOK {
+			if alt := b.solveDirectLat(headTg, 0, b.muzzleH, lasLat); alt.clear {
+				lasS = alt
+				pitchTol = 0.7
+			}
+		}
 	}
 	if morI >= 0 {
 		morS = b.solveMortar(tg, b.slots[morI].stats)
@@ -317,8 +343,8 @@ func (b *Bot) engage(act *proto.Action, tg aimTarget, hasLOS, losRecent bool, hp
 				ey = math.Abs(angDiff(gunS.yaw, b.aim[0]))
 				ep = math.Abs(gunS.pitch - b.aim[1])
 			}
-			tolY := math.Atan2(tg.radius*2.2, math.Max(gunS.dist, 1))
-			tolP := math.Atan2(pitchTol*1.8, math.Max(gunS.dist, 1))
+			tolY := math.Atan2(tg.radius*0.8, math.Max(gunS.dist, 1))
+			tolP := math.Atan2(pitchTol, math.Max(gunS.dist, 1))
 			if ey < tolY && ep < tolP {
 				act.Fire[gunI] = true
 			}
@@ -333,19 +359,29 @@ func (b *Bot) engage(act *proto.Action, tg aimTarget, hasLOS, losRecent bool, hp
 		if sl.charge > 0 {
 			// charging: hold until full (or lethal) and lined up, then let go
 			hold := true
-			lethal := b.laserDamageAt(sl.stats, sl.charge) >= hpLeft && sl.charge >= stat(sl.stats, "min_charge", 0.15)
+			lasMult := 1.0
+			if b.P.SmartFireV2 && tg.rear {
+				lasMult *= b.mech("rear_mult", 1.5)
+			}
+			if (b.P.SmartFireV2 || b.P.CookoffAware) && tg.hasMortar {
+				lasMult *= 1 + stat(b.C.Weapons["laser"], "cookoff", 0)
+			}
+			lethal := b.laserDamageAt(sl.stats, sl.charge)*lasMult >= hpLeft && sl.charge >= stat(sl.stats, "min_charge", 0.15)
 			relThr := full - 1e-3
+			if b.P.LaserEarlyRel {
+				relThr = full - b.dt - 1e-3
+			}
 			if (sl.charge >= relThr || lethal) && hasLOS && lasS.clear && inRange {
 				ey, ep := b.aimErr(lasS)
-				tolY := math.Atan2(tg.radius*2.0, math.Max(lasS.dist, 1))
-				tolP := math.Atan2(pitchTol*1.7, math.Max(lasS.dist, 1))
+				tolY := math.Atan2(tg.radius*0.75, math.Max(lasS.dist, 1))
+				tolP := math.Atan2(pitchTol*0.9, math.Max(lasS.dist, 1))
 				if ey < tolY && ep < tolP {
 					hold = false
 				}
 			}
 			act.Fire[lasI] = hold
 			b.laserHold = hold
-		} else if allowFire && sl.cooldown <= 0.12 && inRange && (hasLOS || losRecent) && (tg.mech || !b.P.LaserMechOnly) {
+		} else if allowFire && sl.cooldown <= 0.12 && inRange && (hasLOS || losRecent) {
 			act.Fire[lasI] = true
 			b.laserHold = true
 		}
@@ -557,7 +593,6 @@ func (b *Bot) theirDPS(tr *Track, d float64) float64 {
 		if li := b.has("lightning"); li >= 0 && b.energy > 20 && d < stat(b.slots[li].stats, "range", 45)-3 {
 			laser = false
 		}
-		// keep conservative laser threat estimate across cooldown ticks
 	}
 	dps := b.dpsOf(gun, laser, tr.Light, tr.Mortar, tr.Cubes, d, true, b.theirGunHit)
 	if b.P.CookoffAware && laser && b.has("mortar") >= 0 {

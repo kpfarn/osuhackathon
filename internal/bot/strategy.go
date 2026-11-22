@@ -297,11 +297,11 @@ type loot struct {
 func (b *Bot) weaponValue(kind string) float64 {
 	switch kind {
 	case "laser":
-		return 2.4
+		return b.P.LaserValue
 	case "lightning":
-		return 2.1
+		return b.P.LightningValue
 	case "mortar":
-		return 2.6
+		return 1.2
 	case "gun":
 		return 2.0
 	}
@@ -313,7 +313,10 @@ func (b *Bot) wantPickup(kind string) (bool, int) {
 	if b.has(kind) >= 0 {
 		return false, -1
 	}
-	_ = stat(b.C.Weapons["laser"], "cookoff", 0)
+	cookoff := stat(b.C.Weapons["laser"], "cookoff", 0)
+	if kind == "mortar" && b.P.NoMortar && (b.realModel() || (b.P.AllNoMortar && cookoff > 0)) {
+		return false, -1
+	}
 	for i := 0; i < 2; i++ {
 		if !b.slots[i].ok {
 			return true, -1
@@ -483,42 +486,15 @@ func (b *Bot) chooseLoot(danger bool, st stance) *loot {
 		}
 	}
 	if wantCubes {
-		// CubeSmart: check next upgrade threshold from hello.config.cubes.upgrade_thresholds
-		nextThr := 999999
-		if b.P.CubeSmart {
-			for _, th := range b.C.Cubes.UpgradeThresholds {
-				ti := int(math.Round(th))
-				if ti > b.o.Self.Cubes {
-					nextThr = ti
-					break
-				}
-			}
-		}
-		threshMult := func(gain int) float64 {
-			if b.P.CubeSmart && b.o.Self.Cubes+gain >= nextThr {
-				return 1.75
-			}
-			return 1.0
-		}
 		for _, it := range b.cubes {
 			if it.Ground {
-				v := 11.0
-				gain := 1
-				if b.P.CubeSmart {
-					for _, o := range b.cubes {
-						if o.ID != it.ID && o.Ground && dist2(o.Pos, it.Pos) < 7.5 {
-							gain++
-						}
-					}
-					v = 11.0 * (1.0 + 0.65*float64(gain-1)) * threshMult(gain)
-				}
-				consider(loot{kind: "cube", id: it.ID, pos: it.Pos}, v, 0)
+				consider(loot{kind: "cube", id: it.ID, pos: it.Pos}, 11, 0)
 			}
 		}
 		for _, it := range b.crates {
 			// roof crates can still be shot from the ground, but the cube stays up there: skip them
 			if it.Ground {
-				consider(loot{kind: "crate", id: it.ID, pos: it.Pos, shoot: true}, 7*threshMult(1), 2.5)
+				consider(loot{kind: "crate", id: it.ID, pos: it.Pos, shoot: true}, 7, 2.5)
 			}
 		}
 		if !danger {
@@ -526,8 +502,7 @@ func (b *Bot) chooseLoot(danger bool, st stance) *loot {
 				if tr.NPC && b.t-tr.LastSeen < 20 {
 					k := b.Nav.Index(tr.Pos[0], tr.Pos[1])
 					if !b.Nav.Solid[k] && math.Abs(float64(b.Nav.Z[k])-tr.Pos[2]) < 4 {
-						npcCubes := int(math.Max(1, stat(b.C.Npc, "cubes", 2)))
-						consider(loot{kind: "npc", id: tr.ID, pos: tr.Pos, shoot: true}, 11*threshMult(npcCubes), 5)
+						consider(loot{kind: "npc", id: tr.ID, pos: tr.Pos, shoot: true}, 11, 5)
 					}
 				}
 			}
@@ -571,18 +546,9 @@ func (b *Bot) chooseLoot(danger bool, st stance) *loot {
 }
 
 var upgradeRank = map[string]float64{
-	"sensors": 0.98, "gyros": 0.95, "jets": 0.92, "mortar_splash": 0.90, "mortar_reload": 0.88,
-	"mortar_velocity": 0.85, "capacitor": 0.82, "reactor": 0.80, "laser_pierce": 0.78,
-	"lightning_chain": 0.75, "servos": 0.68, "nanites": 0.62, "gun_mag": 0.55,
-	"gun_velocity": 0.52, "laser_charge": 0.48, "gun_rate": 0.45, "gun_damage": 0.42,
-	"laser_damage": 0.40, "lightning_range": 0.38, "lightning_efficiency": 0.35,
-	"armor": 0.30, "plating": 0.28,
-}
-
-var upgradeRankV2 = map[string]float64{
-	"plating": 1.00, "armor": 0.96, "gun_mag": 0.95, "laser_damage": 0.93, "lightning_efficiency": 0.92,
-	"gun_damage": 0.90, "lightning_range": 0.87, "laser_charge": 0.86, "gun_rate": 0.84, "gun_velocity": 0.82,
-	"servos": 0.76, "nanites": 0.74, "reactor": 0.50, "capacitor": 0.45,
+	"plating": 1.00, "armor": 0.96, "gun_rate": 0.90, "gun_damage": 0.88, "gun_velocity": 0.80,
+	"laser_damage": 0.91, "laser_charge": 0.86, "lightning_efficiency": 0.92, "lightning_range": 0.87,
+	"nanites": 0.72, "servos": 0.76, "reactor": 0.50, "capacitor": 0.45, "gun_mag": 0.60,
 	"sensors": 0.35, "gyros": 0.30, "jets": 0.30, "mortar_reload": 0.42, "mortar_splash": 0.45,
 	"mortar_velocity": 0.40, "lightning_chain": 0.40, "laser_pierce": 0.20,
 }
@@ -592,13 +558,9 @@ func (b *Bot) pickUpgrade(act *proto.Action) {
 	if of == nil || len(of.Choices) == 0 {
 		return
 	}
-	ranks := upgradeRank
-	if b.P.UpV2 {
-		ranks = upgradeRankV2
-	}
 	best, bv := 0, -1.0
 	for i, c := range of.Choices {
-		v, ok := ranks[c.ID]
+		v, ok := upgradeRank[c.ID]
 		if !ok {
 			v = 0.25
 		}
