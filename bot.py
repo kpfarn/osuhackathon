@@ -226,10 +226,10 @@ class Bot:
             candidates.append((cost, kind, obj))
         for drop in obs.get('drops', ()):
             distance = math.dist(pos[:2], drop['pos'][:2])
-            if (enemy_distance >= 64 and drop['holder'] in (None, me['id'])
-                    and distance <= 150 and drop['lands_in'] < distance / me['stats']['walk_speed'] + 3):
-                healing = 55 * (1 - me['hp'] / me['max_hp'])
-                candidates.append((distance - 93 - healing - drop['progress'] * 10, 'drop', drop))
+            if (enemy_distance >= 52 and drop['holder'] in (None, me['id'])
+                    and distance <= 210 and drop['lands_in'] < distance / me['stats']['walk_speed'] + 12):
+                healing = 90 * (1 - me['hp'] / me['max_hp'])
+                candidates.append((distance - 210 - healing - drop['progress'] * 12, 'drop', drop))
 
         # Prefer a reachable item inside the next ring; rule out detours with no time to return.
         best, best_cost = (None, None), math.inf
@@ -624,6 +624,42 @@ class Bot:
                 best, best_score = (mx, my), score
         return best
 
+    def _dps_of(self, weapons, distance):
+        best = 0.0
+        for w in weapons:
+            if not w:
+                continue
+            kind = w.get('kind') if isinstance(w, dict) else w
+            st = w.get('stats') if isinstance(w, dict) else self.config['weapons'].get(kind)
+            if not st:
+                continue
+            if kind == 'gun' and distance <= st['range']:
+                dps = st['damage'] / st['cooldown'] * (0.70 if distance < 70 else 0.50)
+            elif kind == 'laser' and distance <= st['range']:
+                dps = st['damage'] / (st['charge'] + st['cooldown']) * 0.90
+            elif kind == 'lightning' and distance <= st['range']:
+                dps = st['damage'] / st['cooldown'] * 0.90
+            else:
+                continue
+            if dps > best:
+                best = dps
+        return best
+
+    def _winnable(self, obs, enemies, me):
+        pos = me['pos']
+        close = [e for e in enemies if math.dist(pos[:2], e['pos'][:2]) < 120]
+        if len(close) != 1:
+            return False
+        e = close[0]
+        d = math.dist(pos[:2], e['pos'][:2])
+        mine = self._dps_of(me['weapons'], d)
+        theirs = self._dps_of(e.get('weapons', ()), d)
+        if mine <= 1.0 or theirs <= 1.0:
+            return False
+        ttk = (e.get('hp') or e.get('max_hp', 1400)) / mine
+        ttd = me['hp'] / theirs
+        return ttk < ttd * 1.15 and me['hp'] > 0.35 * me['max_hp']
+
     def act(self, obs):
         try:
             return self._act(obs)
@@ -665,7 +701,8 @@ class Bot:
         if ((hp < 0.59 and (nearest < 115 or damage > 0))
                 or (close_count >= 2 and damage > 0.085 * me['max_hp'] and hp < 0.88)
                 or (hp < 0.46 and now < self.retreat_until)):
-            if not (finishable and hp > 0.28):
+            if not ((finishable and hp > 0.28)
+                    or self._winnable(obs, enemies, me)):
                 self.retreat_until = now + 2.6
         retreating = now < self.retreat_until
         zone_goal, urgent = self.zone_goal(obs)
