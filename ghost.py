@@ -1426,9 +1426,35 @@ class Bot:
         if self.stuck > 5 and t - self.stuck_t > 0.7:
             self.stuck_t = t
             self.stuck = 0
-            self.escape_until = t + 1.1
-            base = math.atan2(move[1], move[0]) if (move[0] or move[1]) else self.rng.random() * TAU
-            self.escape_dir = base + self.rng.choice((1.0, -1.0)) * self.rng.uniform(2.0, 3.0)
+            self.escape_until = t + 1.3
+            # Find a direction that is actually walkable a few metres out and
+            # makes progress toward the goal.  The old random side-step could
+            # keep pointing into the same ravine wall while the zone killed us.
+            best = None
+            bestscore = INF
+            base = math.atan2(move[1], move[0]) if (move[0] or move[1]) else 0.0
+            for k in range(20):
+                ang = k * TAU / 20.0
+                dx, dy = math.cos(ang), math.sin(ang)
+                for dist in (3.0, 6.0, 10.0, 16.0):
+                    x2 = x + dx * dist
+                    y2 = y + dy * dist
+                    ok, h2 = self.arena.walkable(x2, y2, z)
+                    if not ok:
+                        continue
+                    score = (math.hypot(x2 - gx, y2 - gy)
+                             + max(0.0, h2 - z) * 2.5
+                             + abs(ang_diff(ang, base)) * 1.5
+                             + dist * 0.15)
+                    if score < bestscore:
+                        bestscore = score
+                        best = ang
+                    break
+            if best is None:
+                base = (math.atan2(move[1], move[0])
+                        if (move[0] or move[1]) else self.rng.random() * TAU)
+                best = base + self.rng.choice((1.0, -1.0)) * self.rng.uniform(2.0, 3.0)
+            self.escape_dir = best
             self.path = []
             self.path_goal = None
         if t < self.escape_until:

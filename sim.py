@@ -173,6 +173,7 @@ class Match:
         self.hunters = []
         self.player_damage = 0.0
         self.player_damage_by = {}
+        self.player_kills = 0
         self.squad = squad
         self.staged = staged
         self.squad_mem = None
@@ -421,6 +422,8 @@ class Match:
             self.events.append({"type": "death", "id": victim.id})
             if victim is self.player:
                 pass
+            elif by == 0:
+                self.player_kills += 1
 
     # ------------------------------------------------------------- hunters
     def hunter_senses(self, h, target):
@@ -898,7 +901,7 @@ class Match:
         self.time_alive = self.t
         return {"alive": self.player.alive, "time": self.t, "damage": self.player_damage,
                 "zone_damage": self.zone_damage, "hp": self.player.hp,
-                "by": self.player_damage_by}
+                "kills": self.player_kills, "by": self.player_damage_by}
 
 
 def main():
@@ -925,7 +928,7 @@ def main():
         times.append(r["time"])
         tot += r["damage"]
         print(f"seed {s:3d} alive={r['alive']} t={r['time']:5.1f} "
-              f"dmg={r['damage']:6.0f} zone={r['zone_damage']:5.0f} cubes={bot.cubes}")
+              f"dmg={r['damage']:6.0f} zone={r['zone_damage']:5.0f} kills={r['kills']} cubes={bot.cubes}")
     print("mean damage", round(tot / len(seeds)), "median survival", sorted(times)[len(times) // 2])
 
 
