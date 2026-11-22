@@ -65,7 +65,7 @@ class Bot:
         urgent = (not me['in_zone'] or current_margin < min(12, zone['radius'] * 0.3)
                   or (margin < buffer and zone['shrink_end'] - now < eta * 1.55 + 11))
         ux, uy = unit(pos[0] - center[0], pos[1] - center[1])
-        depth = max(0.0, radius - (max(buffer + 18, radius * 0.58) if not urgent else buffer + 10))
+        depth = max(0.0, radius - (max(buffer + 18, radius * 0.30) if not urgent else buffer + 10))
         return (center[0] + ux * depth, center[1] + uy * depth), urgent
 
     def open_ground(self, obj, me):
@@ -336,7 +336,7 @@ class Bot:
             return self.patrol_point
         # Follow a short arc inside the next ring instead of switching between center and rim.
         heading = math.atan2(pos[1] - center[1], pos[0] - center[0])
-        orbit = min(radius * 0.55, max(radius * 0.28, math.dist(pos[:2], center)))
+        orbit = min(radius * 0.78, max(radius * 0.38, math.dist(pos[:2], center)))
         step = min(1.4, 70 / max(10, orbit))
         for offset in (step, step * 0.55, -step):
             angle = heading + self.turn * offset
@@ -363,21 +363,11 @@ class Bot:
             if None in slots and pickup['kind'] != 'gun':
                 action['take'] = pickup['id']
             elif None not in slots:
-                held = {weapon['kind'] for weapon in slots if weapon}
-                gun_index = next((i for i, weapon in enumerate(slots)
-                                  if weapon and weapon['kind'] == 'gun'), None)
-                if (gun_index is not None and pickup['kind'] in ('laser', 'lightning')
-                        and pickup['kind'] not in held):
-                    # winners finish on laser + lightning, not the arm gun
-                    action.update(take=pickup['id'], drop=gun_index)
-                else:
-                    secondary = next((i for i, weapon in enumerate(slots)
-                                      if weapon['kind'] != 'gun'), None)
-                    if secondary is not None:
-                        weapon = slots[secondary]
-                        if (values[pickup['kind']] > values[weapon['kind']]
-                                and not weapon.get('charge', 0)):
-                            action.update(take=pickup['id'], drop=secondary)
+                secondary = next((i for i, weapon in enumerate(slots) if weapon['kind'] != 'gun'), None)
+                if secondary is not None:
+                    weapon = slots[secondary]
+                    if values[pickup['kind']] > values[weapon['kind']] and not weapon.get('charge', 0):
+                        action.update(take=pickup['id'], drop=secondary)
         offer = obs.get('offer')
         if offer and offer.get('choices'):
             choices = offer['choices']
@@ -783,10 +773,7 @@ class Bot:
             mode = 'engage'
             vx, vy = unit(target['pos'][0] - pos[0], target['pos'][1] - pos[1])
             distance = math.dist(pos[:2], target['pos'][:2])
-            has_laser = any(w and w['kind'] == 'laser' for w in me['weapons'])
-            preferred = 150 if has_laser else 90
-            if target.get('hp', me['max_hp']) < 0.5 * me['max_hp']:
-                preferred -= 20
+            preferred = 39 if target.get('hp', me['max_hp']) < 0.5 * me['max_hp'] else 57
             if any(weapon and weapon['kind'] == 'lightning' for weapon in me['weapons']):
                 preferred -= 9
             radial = max(-1.0, min(0.62, (distance - preferred) / 32))
