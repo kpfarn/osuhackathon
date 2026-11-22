@@ -849,12 +849,12 @@ class Bot:
             x, y = d["pos"][0], d["pos"][1]
             dd = math.hypot(x - px, y - py)
             did = d["id"]
-            if (dd > 155.0 or not in_zone(x, y)
+            if (dd > 210.0 or not in_zone(x, y)
                     or self.loot_black.get(did, 0.0) > now):
                 continue
             near = min((math.hypot(e["pos"][0] - x, e["pos"][1] - y)
                         for e in threats), default=999.0)
-            if near < 120.0:
+            if near < 60.0:
                 continue
             if dd < bd:
                 bd = dd
@@ -871,6 +871,27 @@ class Bot:
                 else:
                     self.loot_black[did] = now + 35.0
                 return
+            # winners hold a special early; take a covered trip to one
+            if self.weapons[1] is None and (not threats or nd > 75.0):
+                best = None
+                bd = 180.0
+                for ident, (kind, x, y, zc, ts) in self.res_mem.items():
+                    if not kind.startswith('pickup_') or kind == 'pickup_gun':
+                        continue
+                    if self.loot_black.get(ident, 0.0) > now:
+                        continue
+                    dd = math.hypot(x - px, y - py)
+                    if dd < bd and in_zone(x, y):
+                        bd = dd
+                        best = (x, y, 'weapon', ident)
+                if best is not None:
+                    bid = best[3]
+                    if bid not in self.loot_dead:
+                        self.loot_dead[bid] = now + 13.0
+                    if now <= self.loot_dead[bid]:
+                        self.loot = best
+                        self.loot_t = now
+                        return
             # grab a cube if we can reach it without breaking cover
             best = None
             bd = 115.0 if self.cubes < 3 else 82.0
@@ -1234,15 +1255,12 @@ class Bot:
                       if e.get("real") and e.get("id", -1) >= 0
                       and math.hypot(e["pos"][0] - x, e["pos"][1] - y) < 130.0]
         engage = None
-        if not zone_dash and not urgent and self.hp > 0.70 * self.max_hp:
-            wounded = [e for e in real_close
-                       if (e.get("hp") or 1400.0) < 0.42 * 1400.0]
-            if wounded and math.hypot(wounded[0]["pos"][0] - x,
-                                      wounded[0]["pos"][1] - y) < 160.0:
-                engage = wounded[0]
-            elif (len(real_close) == 1
-                  and (self.weapons[1] is not None or nd < 65.0)):
-                engage = real_close[0]
+        if not zone_dash and not urgent and self.hp > 0.60 * self.max_hp:
+            target, _ = self._best_mech(obs, 160.0)
+            if target is not None:
+                thp = target.get("hp") or 1400.0
+                if thp < 0.45 * 1400.0 or len(real_close) <= 2:
+                    engage = target
         if zone_dash:
             mode = "zone!"
             if zr <= 1.0:
@@ -1319,15 +1337,15 @@ class Bot:
                 elif ld < 210.0 and self.loot[2] == "drop":
                     near = min((math.hypot(e["pos"][0] - lx, e["pos"][1] - ly)
                                 for e in threats), default=999.0)
-                    if near > 120.0:
+                    if near > 60.0:
                         step = self._covered_step(lx, ly, threats, t)
                 elif ld < 110.0 and self.loot[2] == "cube":
                     step = self._covered_step(lx, ly, threats, t, 55.0)
                 elif ld < 100.0 and self.loot[2] == "crate":
                     step = self._covered_step(lx, ly, threats, t, 50.0)
-                elif ld < 120.0 and self.loot[2] == "weapon":
+                elif ld < 180.0 and self.loot[2] == "weapon":
                     step = self._covered_step(lx, ly, threats, t, 60.0)
-            if step is not None and nd > 90.0:
+            if step is not None and nd > 65.0:
                 mode = "loot"
                 goal = step
             else:
