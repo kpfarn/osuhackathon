@@ -2,6 +2,8 @@
 
 ## THIS REPO PLACED 9th OUT OF OVER 400 ENTRIES.
 
+https://www.joinbuilders.org/buildathon/leaderboard
+
 Submission for the **Mech Royale** Builders Buildathon track. The image is
 built from this folder; `Dockerfile` is at the repository root.
 
