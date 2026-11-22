@@ -2,6 +2,6 @@
 FROM scratch
 COPY apex-go /mechbot
 # Randomized zig-zag only while under ranged gun fire (existing dodge/jink path).
-ENV BOT_PARAMS='{"Jink":0.6}'
+ENV BOT_PARAMS='{"Jink":0.6,"OpenSecs":45}'
 USER 65534:65534
 ENTRYPOINT ["/mechbot"]
