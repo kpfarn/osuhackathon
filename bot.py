@@ -656,13 +656,13 @@ class Bot:
         self.update_damage(obs)
         damage = sum(event[1] for event in self.damage)
         finishable = any(
-            (e.get('hp', 1400) < 0.30 * e.get('max_hp', 1400)
-             and math.dist(pos[:2], e['pos'][:2]) < 140)
+            (e.get('hp', 1400) < 0.40 * e.get('max_hp', 1400)
+             and math.dist(pos[:2], e['pos'][:2]) < 160)
             for e in enemies)
         if ((hp < 0.59 and (nearest < 115 or damage > 0))
                 or (close_count >= 2 and damage > 0.085 * me['max_hp'] and hp < 0.88)
                 or (hp < 0.46 and now < self.retreat_until)):
-            if not (finishable and hp > 0.32):
+            if not (finishable and hp > 0.28):
                 self.retreat_until = now + 2.6
         retreating = now < self.retreat_until
         zone_goal, urgent = self.zone_goal(obs)
