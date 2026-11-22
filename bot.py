@@ -467,6 +467,9 @@ class Bot:
                     continue
                 kind = weapon['kind']
                 ready = weapon['cooldown'] <= 0.11
+                if kind == 'gun':
+                    ready = (ready and weapon.get('ammo', 1) > 0
+                             and weapon.get('reload', 0.0) <= 0.1)
                 if kind == 'laser' and weapon.get('charge', 0) > 0:
                     priority = 8
                 elif kind == 'laser' and ready and (distance > 29 or not target.get('kind')):
@@ -687,6 +690,20 @@ class Bot:
                 loot = self.recovery_drop(obs, enemies)
                 if loot is not None:
                     kind = 'drop'
+                elif nearest > 75.0:
+                    # pick up cubes dropped by the fight we just won
+                    best = None
+                    bd = 35.0
+                    for cb in obs['cubes']:
+                        if self.zone_margin(cb['pos'], zone['center'],
+                                            zone['radius']) < 3:
+                            continue
+                        dd = math.dist(pos[:2], cb['pos'][:2])
+                        if dd < bd:
+                            bd = dd
+                            best = cb
+                    if best is not None:
+                        kind, loot = 'cube', best
             else:
                 kind, loot = self.loot_goal(obs, nearest)
         if loot is not None and kind != 'drop':
@@ -707,7 +724,7 @@ class Bot:
             mode, goal = 'edge', tuple(loot['pos'][:2])
         elif urgent:
             mode = 'rotate'
-        elif retreating and kind != 'drop':
+        elif retreating and kind not in ('drop', 'cube'):
             mode = 'recover'
             goal = self.retreat_goal(obs, enemies, zone_goal)
             hold = math.dist(pos[:2], goal) < 4.3
