@@ -1,9 +1,9 @@
 # Mech Royale Bot — TTUN / r1ver baseline
 
+## THIS REPO PLACED 9th OUT OF OVER 400 ENTRIES.
+
 Submission for the **Mech Royale** Builders Buildathon track. The image is
 built from this folder; `Dockerfile` is at the repository root.
-
-THIS REPO PLACED 9th OUT OF OVER 400 ENTRIES.
 
 This is the MIT-licensed **TTUN / r1ver** economy bot, the exact baseline
 published by team r1ver. It is vendored and submitted unchanged except for the
