@@ -43,6 +43,7 @@ Track each submission here so score changes can be attributed to ideas.
 | 5 | `d31ce1e` | Ghost rewrite: A* nav, real cover, laser breaks | 0.42 | Survives, but outlives nobody: never kills, no cubes |
 | 6 | `5889bcd` | + accident-free LOS, NPC/mortar avoidance, cube/drop looting | TBD | |
 | 7 | | + weapon pickup and laser/lightning fire | TBD | kills 1-10 in the local squad test |
+| 8 | | rear-armor facing, final-centre collapse, drone cubes | TBD | mixed-tier squad median ~403 s (was ~402 s) |
 
 > Update this table after each submission.
 
@@ -85,9 +86,19 @@ than a laser charge (0.75 s)**.
 7. **Kills matter for placement.** The squad does not fight itself, so outliving
    it means thinning it. The bot fires whenever it has a target; it does not
    chase a fight it cannot win.
-8. **No jets.** `boost` is suppressed in the air (a held jet climbs until the
+8. **Rear armor is aimed.** The torso faces the nearest remembered hunter even
+   while the legs run away, so incoming fire lands in the front arc (1.0x)
+   instead of the rear (1.5x).
+9. **The final circle is taken at the centre.** When the zone is under 14 m the
+   bot ignores threats and station-keeps on the point it is collapsing to:
+   at radius 0 only that point is safe, and overlapping mechs are pushed off
+   it. Anyone with more HP left wins the collapse.
+10. **Drones are food.** A full drone is 350 HP for two cubes; the bot shoots
+   one from outside its 45 m range when no hunter is near. Cubes are max HP
+   (which decides the collapse), damage, and armor offers.
+11. **No jets.** `boost` is suppressed in the air (a held jet climbs until the
    match ends); jumps are used only to clear low steps.
-9. **Performance**: per-tick work is capped by a wall-clock budget; measured
+12. **Performance**: per-tick work is capped by a wall-clock budget; measured
    p99 is ~33 ms and max ~39 ms on the dev machine (`check.py` passes clean).
 
 Local results (`sim.py`, one sniper that tracks perfectly): median survival

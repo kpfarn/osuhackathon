@@ -240,7 +240,7 @@ class Bot:
                                  "vel": m.get("vel", [0, 0, 0]),
                                  "w": 0.5, "weapons": [], "charging": False,
                                  "hp": m.get("hp"), "real": False,
-                                 "eye": 2.0})
+                                 "npc": True, "eye": 2.0})
                 continue
             if m["kind"] != "mech":
                 continue
@@ -294,7 +294,8 @@ class Bot:
                                  "vel": [0, 0, 0], "w": 1.0,
                                  "weapons": [], "charging": age < 1.0,
                                  "hp": None, "real": False})
-        self.enemies.sort(key=lambda e: (e["pos"][0] - px) ** 2 + (e["pos"][1] - py) ** 2)
+        self.enemies.sort(key=lambda e: (1 if e.get("npc") else 0,
+                                         (e["pos"][0] - px) ** 2 + (e["pos"][1] - py) ** 2))
         self.threats = self.enemies[:4]
         self.charge_threat = any(
             e.get("charging") and (e["pos"][0] - px) ** 2 + (e["pos"][1] - py) ** 2 < 300 ** 2
@@ -808,9 +809,9 @@ class Bot:
 
         # ---- crates: only from cover, and only with some breathing room
         ca = None
+        cad = 1e9
         if ((exp_here <= 0.0 or (nd > 150.0 and self.hp > 0.65 * self.max_hp))
                 and (not threats or nd > 95.0)):
-            cad = 1e9
             muzzle = (px, py, self.pos[2] + self.muzzle_h)
             for ident, (kind, x, y, zc, ts) in self.res_mem.items():
                 if kind != "crate":
@@ -822,17 +823,28 @@ class Bot:
                                                   terrain=False):
                     cad = dd
                     ca = (x, y, zc + 1.1)
-        # drones drop two cubes each; they are easy and do not count for placement
-        if ca is None and (not threats or nd > 170.0):
+        # Drones drop two cubes each.  Ten cubes are +40% max HP -- which
+        # decides the final collapse -- plus damage and upgrade offers, and a
+        # drone only answers with 25-damage pot shots.  Pick the nearest one
+        # when nothing dangerous is close and it beats the crate in reach.
+        if ((self.cubes < 8 or self.hp < 0.60 * self.max_hp)
+                and (not threats or nd > 150.0)
+                and self.hp > 0.50 * self.max_hp):
+            bd = min(cad - 6.0, 68.0)
             for m in obs.get("mechs", ()):
                 if m.get("kind") != "npc":
                     continue
                 x, y, zc = m["pos"]
                 dd = math.hypot(x - px, y - py)
-                if dd > 50.0 or m.get("hp", 999.0) > 360.0:
+                if dd >= bd:
                     continue
+                if m.get("hp", 999.0) > 360.0 and dd > 60.0:
+                    continue
+                if self.arena.segment_blocked((px, py, self.pos[2] + self.muzzle_h),
+                                              (x, y, zc + 1.5), terrain=False):
+                    continue
+                bd = dd
                 ca = (x, y, zc + 1.5)
-                break
         safe_shot = (not threats) or nd > 110.0
         self.farm_aim = (ca is not None and safe_shot
                          and self.hp > 0.60 * self.max_hp
@@ -1261,7 +1273,16 @@ class Bot:
                 thp = target.get("hp") or 1400.0
                 if thp < 0.45 * 1400.0 or len(real_close) <= 2:
                     engage = target
-        if zone_dash:
+        # Final collapse: when the circle is tiny, the only survivable spot is
+        # the centre it is shrinking to.  Cover is worthless there -- zone DPS
+        # kills in seconds -- so ignore hunters and take the middle.  Whoever
+        # holds the exact final centre outlives every mech pushed off it.
+        late_zone = zr <= 14.0
+        if late_zone:
+            mode = "zone!"
+            goal = (gx, gy)
+            boost = self.energy > 5
+        elif zone_dash:
             mode = "zone!"
             if zr <= 1.0:
                 goal = (zc[0], zc[1])
@@ -1504,6 +1525,13 @@ class Bot:
             return yaw, -0.05
         if self.last_damage_bearing is not None and age < 3.0:
             return self.last_damage_bearing, -0.02
+        # Face the nearest remembered hunter even while running away: torso and
+        # legs are independent, and incoming fire from outside the front arc
+        # does 1.5x damage.  Keeping the threat in front cuts that to 1.0x.
+        if threats:
+            real = [e for e in threats if e.get("real")]
+            e = real[0] if real else threats[0]
+            return math.atan2(e["pos"][1] - y, e["pos"][0] - x), -0.02
         yaw = math.atan2(move[1], move[0]) if (move[0] or move[1]) else self.aim[0]
         return yaw, -0.06
 
