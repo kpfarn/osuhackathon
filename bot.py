@@ -374,7 +374,16 @@ class Bot:
         offer = obs.get('offer')
         if offer and offer.get('choices'):
             choices = offer['choices']
-            value = self.UPGRADE_VALUE
+            value = dict(self.UPGRADE_VALUE)
+            held = {weapon['kind'] for weapon in slots if weapon}
+            if 'laser' in held:
+                value['laser_damage'] = 14
+                value['laser_charge'] = 12
+                value['laser_pierce'] = 11
+            if 'lightning' in held:
+                value['lightning_efficiency'] = 13
+                value['lightning_range'] = 11
+                value['lightning_chain'] = 10
             action['pick'] = max(range(len(choices)), key=lambda i: value.get(choices[i]['id'], 3))
 
     def update_damage(self, obs):
