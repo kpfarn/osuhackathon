@@ -1,58 +1,36 @@
-# Mech Royale Bot — TTUN / r1ver baseline
+# Mech Royale Bot — Apex-Go v3
 
-Submission for the **Mech Royale** Builders Buildathon track. The image is
-built from this folder; `Dockerfile` is at the repository root.
+Submission for the **Mech Royale** Builders Buildathon track. The repository root
+has the `Dockerfile` required by the scorer.
 
-This is the MIT-licensed **TTUN / r1ver** economy bot, the exact baseline
-published by team r1ver. It is vendored and submitted unchanged except for the
-Docker entrypoint. That revision scored **5.10** official practice points for
-r1ver; team r1ver is **rank 16 at 5.52** on the current builders-4 board
-(top-32 qualifying cutoff: 5.19).
+`apex-go` is a statically linked linux/amd64 build of **Apex-Go v3** from the
+MIT-licensed `ahmad-ovh/Buildathon` repository, built from the matching source in
+`cmd/` and `internal/` (see `LICENSE-APEX`). Apex-Go v2 scored **6.28** official
+placement points and was #1 on the practice board; v3 adds the five
+zero-overfit upgrades described in that repository's `docs/STATE.md` (predicted
+**6.45–6.75** official).
 
-## Files
+The build is a `FROM scratch` image with the single static binary, so the
+scorer's build step only copies 3.2 MB and cannot fail on network/toolchain
+availability.
 
-- `bot.ts` — the bot: economy, looting, zone routing, combat, upgrades.
-- `map.ts` — terrain/building map and navigation.
-- `mechfight.ts` — Bun/TypeScript protocol wrapper.
-- `Dockerfile` — Bun runtime, cache redirected to `/tmp` for the read-only sandbox.
-- `LICENSE-TTUN` — MIT license for the r1ver source.
-- `dev/legacy/` — previous Python bots (Cover Circuit and Ghost) kept for reference;
-  not copied into the image.
-
-## How to test locally
+## Verify
 
 ```sh
-# Protocol conformance (requires Bun)
-python3 mechfight-kit/check/check.py -- bun bot.ts
+# Protocol conformance with the official kit
+python3 mechfight-kit/check/check.py -- ./apex-go
 
-# With the match's map path
-python3 mechfight-kit/check/check.py --map-dir /arena -- bun bot.ts
-
-# Docker build (no network at runtime)
-docker build -t ttun-bot .
+# Reproduce the build yourself (Go 1.25+)
+GOFLAGS=-mod=mod CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o apex-go ./cmd/mechbot
 ```
 
-Measured: ready in ~0.5 s, p99 ~24 ms, max ~28 ms, 300/300 answers in budget.
-
-## Strategy
-
-- Economy first: keep the gun plus the best special, detour for cubes, weapons,
-  crates, drones, and supply drops when the route is safe.
-- Upgrade priority: plating, armor, nanites, then weapon upgrades.
-- Fight with target focus and predictive aim; use cover when losing.
-- Approach the zone ahead of the shrink; jump/jet recovery when stuck.
+Measured locally: ready in ~1.7 s, **300/300** answers in budget, p99 ~12.5 ms,
+max ~27 ms.
 
 ## Submission log
 
-| # | Idea | Score | Notes |
-|---|------|-------|-------|
-| 1–6 | Stealth / Ghost / Cover Circuit variants | 0.15 → 4.9 | Best builders-3 result; 4.61 on builders-4 |
-| 7 | TTUN / r1ver baseline (this build) | TBD | Known 5.10 builders-3; team r1ver 5.52 builders-4 |
-
-## Attribution
-
-`bot.ts`, `map.ts`, and `mechfight.ts` are the MIT-licensed TTUN / r1ver
-implementation, vendored via
-[`Evans-Kwashie/mech-royale-bot`](https://github.com/Evans-Kwashie/mech-royale-bot)
-(`baselines/r1ver`, original revision `af337d5c1275d03478685bd4936c8a551fa6b200`).
-Copyright (c) 2026 TTUN; see `LICENSE-TTUN`.
+| Commit | Idea | Official score |
+|---|---|---|
+| r1ver baseline | MIT TTUN/r1ver economy bot | 4.99 |
+| Apex-Go v2 | vendored #1 bot (`3af1ada` on `apex-go`) | 6.28 |
+| Apex-Go v3 | this build | TBD |
