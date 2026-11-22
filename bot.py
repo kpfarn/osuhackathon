@@ -202,10 +202,13 @@ class Bot:
             elif kind == 'cube':
                 limit, reward = (100, 84) if early else (75, 63)
                 if capped:
-                    # Spare cubes still increase collision size. A nearby upgrade can justify one.
-                    if not next_cube_unlocks:
+                    # Spare cubes only add size, but they are the only route to the
+                    # next upgrade offer (15, 21, 28, ...). Take them when close.
+                    nxt = next((th for th in cube_rules['upgrade_thresholds']
+                                if th > me['cubes']), None)
+                    if nxt is None or nxt - me['cubes'] > 6:
                         continue
-                    limit, reward = 32, 56
+                    limit, reward = 38, 55
                 elif gearing_up and next_cube_unlocks:
                     limit, reward = 125, 106
                 elif not early and next_cube_unlocks and enemy_distance > 100:
